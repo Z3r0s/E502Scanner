@@ -44,12 +44,34 @@ A powerful, modular OSINT terminal built from scratch in Python. This tool provi
 - Web vulnerability detection
 - Service misconfiguration detection
 
+### Image Intelligence
+- EXIF data extraction and analysis
+- Geolocation data extraction
+- Hidden content detection (steganography)
+- Visual anomaly analysis
+- Image hashing and similarity detection
+- Basic image information extraction
+- Metadata steganography detection
+- Image pattern analysis
+
+### Username/Email Intelligence
+- Username availability checking
+- Email pattern analysis
+- Username pattern generation
+- Email format validation
+- Username relationship mapping
+- Email infrastructure analysis
+- Username history tracking
+- Email security analysis
+- Pattern recognition
+- Cross-platform correlation
+
 ## Installation
 
 1. Clone the repository:
 ```bash
 git clone https://github.com/Z3r0s/E502Scanner.git
-cd E502OSINT
+cd E502Scanner
 ```
 
 2. Install dependencies:
@@ -106,6 +128,24 @@ rate <domain> <requests/sec>          # Set rate limit
 rotate                                # Rotate user agent
 ```
 
+### Image Intelligence
+```bash
+image <path>        # Analyze image metadata and content
+exif <path>         # Extract EXIF data
+geo <path>          # Extract geolocation data
+stego <path>        # Check for hidden content
+hash <path>         # Generate image hashes
+```
+
+### Username/Email Intelligence
+```bash
+username <name>     # Check username availability
+email <address>     # Analyze email patterns
+pattern <name>      # Generate username patterns
+history <name>      # Track username history
+correlate <name>    # Map username relationships
+```
+
 ## Security Notice
 
 This tool is designed for authorized security testing and research purposes only. Always:
@@ -124,7 +164,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Author
 
-- z3r0s / Error502
+- z3r0s / E502
 
 ## Acknowledgments
 
