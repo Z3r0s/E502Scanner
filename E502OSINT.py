@@ -2,13 +2,13 @@
 E502 OSINT Terminal – Advanced Reconnaissance Toolkit
 ----------------------------------------------------
 Author: z3r0s / Error502
-Version: 1.0.0
+Version: 1.1.0
 Last Updated: 2024
 
 A comprehensive OSINT tool built for security researchers and penetration testers.
 Features include DNS analysis, SSL inspection, port scanning, and Tor integration.
 
-Install: pip install rich art2text requests[socks] dnspython python-whois beautifulsoup4 PySocks cryptography
+Install: pip install -r requirements.txt
 Run:     python E502OSINT.py
 
 Note: This tool is designed for authorized security testing and research purposes only.
@@ -34,19 +34,55 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.prompt import Prompt
 from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.tree import Tree
+from rich.live import Live
+from rich.layout import Layout
+from rich import box
 from art2text import text2art
 import threading
 import time
+from datetime import datetime
 
-# Initialize Rich console
-console = Console()
+# Import new modules from core package
+from core.network_analysis import NetworkAnalyzer
+from core.web_recon import WebAnalyzer
+from core.ssl_analyzer import SSLAnalyzer
+from core.privacy_manager import PrivacyManager
+from core.vulnerability_scanner import VulnerabilityScanner
+
+# Import Discord integration
+from discord.webhook_manager import DiscordWebhookManager
+
+# Initialize Rich console with custom theme
+console = Console(theme={
+    "info": "cyan",
+    "warning": "yellow",
+    "danger": "red",
+    "success": "green",
+    "scanning": "blue",
+    "vulnerability.high": "red",
+    "vulnerability.medium": "yellow",
+    "vulnerability.low": "green"
+})
 
 # Global variables
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 AUTHOR = "z3r0s / Error502"
 USE_PROXY = False
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 9050
+SCAN_STATUS = "Ready"
+LAST_COMMAND = None
+DISCORD_ENABLED = False
+
+# Initialize analyzers
+network_analyzer = NetworkAnalyzer()
+web_analyzer = WebAnalyzer()
+ssl_analyzer = SSLAnalyzer()
+privacy_manager = PrivacyManager()
+vuln_scanner = VulnerabilityScanner()
+discord_manager = DiscordWebhookManager()
 
 # Cyber tips and quotes
 CYBER_TIPS = [
@@ -75,12 +111,21 @@ HACKER_QUOTES = [
     "The more you learn, the more you earn."
 ]
 
+def create_progress_bar(description: str) -> Progress:
+    """Create a progress bar with custom styling."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(complete_style="green", finished_style="green"),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console
+    )
+
 def display_banner() -> None:
-    """Display the E502 banner with version and author information.
-    The banner is generated using art2text for a clean, professional look.
-    """
+    """Display the E502 banner with version and author information."""
     banner = text2art("E502", font="block")
-    console.print(Panel(banner, style="bold blue"))
+    console.print(Panel(banner, style="bold blue", box=box.DOUBLE))
     
     # Display version and author information
     console.print(f"[bold green]Version:[/] {VERSION}")
@@ -88,7 +133,150 @@ def display_banner() -> None:
     
     # Display a random security tip or quote
     tip_or_quote = random.choice(CYBER_TIPS + HACKER_QUOTES)
-    console.print(Panel(tip_or_quote, title="Security Tip", style="bold yellow"))
+    console.print(Panel(tip_or_quote, title="Security Tip", style="bold yellow", box=box.ROUNDED))
+
+def create_command_prompt() -> str:
+    """Create a dynamic command prompt with status indicators."""
+    status_color = {
+        "Ready": "green",
+        "Scanning": "yellow",
+        "Error": "red"
+    }.get(SCAN_STATUS, "white")
+    
+    proxy_status = "[green]✓[/]" if USE_PROXY else "[red]✗[/]"
+    
+    return f"[bold blue]E502[/] [bold {status_color}]{SCAN_STATUS}[/] {proxy_status} > "
+
+def display_network_tree(topology: Dict) -> None:
+    """Display network topology as a tree structure."""
+    tree = Tree("[bold blue]Network Topology[/]")
+    
+    # Add target node
+    target_node = tree.add(f"[bold green]{topology['target']}[/]")
+    
+    # Add discovered devices
+    for device in topology.get('devices', []):
+        device_node = target_node.add(f"[yellow]{device['ip']}[/]")
+        
+        # Add services
+        if device.get('services'):
+            services_node = device_node.add("[cyan]Services[/]")
+            for service in device['services']:
+                services_node.add(
+                    f"[green]{service['name']}[/] "
+                    f"([blue]Port {service['port']}[/])"
+                )
+    
+    console.print(tree)
+
+def display_vulnerability_table(vulnerabilities: List[Dict]) -> None:
+    """Display vulnerabilities in a color-coded table."""
+    table = Table(
+        title="Vulnerability Scan Results",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold magenta"
+    )
+    
+    table.add_column("Severity", style="bold")
+    table.add_column("Type", style="cyan")
+    table.add_column("Location", style="green")
+    table.add_column("Description", style="white")
+    
+    for vuln in vulnerabilities:
+        severity_style = {
+            "high": "red",
+            "medium": "yellow",
+            "low": "green"
+        }.get(vuln.get('severity', 'low'), 'white')
+        
+        table.add_row(
+            f"[{severity_style}]{vuln.get('severity', 'unknown')}[/]",
+            vuln.get('type', 'unknown'),
+            vuln.get('location', 'unknown'),
+            vuln.get('description', 'unknown')
+        )
+    
+    console.print(table)
+
+def display_port_scan_results(results: List[Dict]) -> None:
+    """Display port scan results with visual indicators."""
+    table = Table(
+        title="Port Scan Results",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold magenta"
+    )
+    
+    table.add_column("Port", style="cyan")
+    table.add_column("Service", style="green")
+    table.add_column("State", style="bold")
+    table.add_column("Version", style="yellow")
+    
+    for result in results:
+        state_style = "green" if result.get('state') == 'open' else "red"
+        table.add_row(
+            str(result.get('port', '')),
+            result.get('service', ''),
+            f"[{state_style}]{result.get('state', '')}[/]",
+            result.get('version', '')
+        )
+    
+    console.print(table)
+
+def display_web_analysis(analysis: Dict) -> None:
+    """Display web analysis results in a collapsible format."""
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header"),
+        Layout(name="body"),
+        Layout(name="footer")
+    )
+    
+    # Header with basic info
+    layout["header"].update(Panel(
+        f"[bold blue]Web Analysis Results for {analysis.get('url', 'Unknown')}[/]\n"
+        f"Status Code: [bold green]{analysis.get('status_code', 'Unknown')}[/]",
+        box=box.ROUNDED
+    ))
+    
+    # Body with detailed analysis
+    body_content = []
+    
+    # Technologies
+    if analysis.get('technologies'):
+        tech_table = Table(box=box.SIMPLE)
+        tech_table.add_column("Technology", style="cyan")
+        tech_table.add_column("Version", style="green")
+        for tech, version in analysis['technologies'].items():
+            tech_table.add_row(tech, version)
+        body_content.append(Panel(tech_table, title="Technologies", box=box.ROUNDED))
+    
+    # Security Headers
+    if analysis.get('security_headers'):
+        headers_table = Table(box=box.SIMPLE)
+        headers_table.add_column("Header", style="cyan")
+        headers_table.add_column("Value", style="green")
+        headers_table.add_column("Status", style="bold")
+        for header, info in analysis['security_headers'].items():
+            status = "[green]✓[/]" if info.get('present') else "[red]✗[/]"
+            headers_table.add_row(header, info.get('value', ''), status)
+        body_content.append(Panel(headers_table, title="Security Headers", box=box.ROUNDED))
+    
+    layout["body"].update(Panel(
+        "\n".join(str(content) for content in body_content),
+        box=box.ROUNDED
+    ))
+    
+    # Footer with recommendations
+    if analysis.get('recommendations'):
+        layout["footer"].update(Panel(
+            "\n".join(f"• {rec}" for rec in analysis['recommendations']),
+            title="Recommendations",
+            box=box.ROUNDED
+        ))
+    
+    console.print(layout)
 
 def check_tor_port() -> bool:
     """Check if Tor is running on the default port."""
@@ -759,99 +947,260 @@ def scan_target(target: str) -> None:
         except Exception as e:
             console.print(f"[bold red]Error saving results: {str(e)}[/]")
 
+def handle_network_scan(target: str) -> None:
+    """Handle network scanning command."""
+    try:
+        console.print("[yellow]Starting network analysis...[/]")
+        topology = network_analyzer.network_topology(target)
+        network_analyzer.display_network_info(topology)
+        if DISCORD_ENABLED:
+            discord_manager.send_network_scan_result(target, topology)
+    except Exception as e:
+        console.print(f"[red]Error during network scan: {str(e)}[/]")
+        if DISCORD_ENABLED:
+            discord_manager.send_alert("Network Scan Error", str(e), "error")
+
+def handle_web_analysis(url: str) -> None:
+    """Handle web analysis command."""
+    try:
+        console.print("[yellow]Starting web analysis...[/]")
+        analysis = web_analyzer.analyze_website(url)
+        web_analyzer.display_web_analysis(analysis)
+        if DISCORD_ENABLED:
+            discord_manager.send_web_scan_result(url, analysis)
+    except Exception as e:
+        console.print(f"[red]Error during web analysis: {str(e)}[/]")
+        if DISCORD_ENABLED:
+            discord_manager.send_alert("Web Analysis Error", str(e), "error")
+
+def handle_ssl_analysis(hostname: str) -> None:
+    """Handle SSL analysis command."""
+    try:
+        console.print("[yellow]Starting SSL analysis...[/]")
+        analysis = ssl_analyzer.analyze_ssl(hostname)
+        ssl_analyzer.display_ssl_analysis(analysis)
+        if DISCORD_ENABLED:
+            discord_manager.send_ssl_scan_result(hostname, analysis)
+    except Exception as e:
+        console.print(f"[red]Error during SSL analysis: {str(e)}[/]")
+        if DISCORD_ENABLED:
+            discord_manager.send_alert("SSL Analysis Error", str(e), "error")
+
+def handle_vuln_scan(target: str) -> None:
+    """Handle vulnerability scanning command."""
+    try:
+        console.print("[yellow]Starting vulnerability scan...[/]")
+        results = vuln_scanner.scan_target(target)
+        vuln_scanner.display_scan_results(results)
+        if DISCORD_ENABLED:
+            discord_manager.send_vuln_scan_result(target, results)
+    except Exception as e:
+        console.print(f"[red]Error during vulnerability scan: {str(e)}[/]")
+        if DISCORD_ENABLED:
+            discord_manager.send_alert("Vulnerability Scan Error", str(e), "error")
+
+def handle_privacy_status() -> None:
+    """Handle privacy status command."""
+    try:
+        privacy_manager.display_privacy_status()
+    except Exception as e:
+        console.print(f"[red]Error displaying privacy status: {str(e)}[/]")
+
+def handle_add_proxy(name: str, host: str, port: int, proxy_type: str) -> None:
+    """Handle add proxy command."""
+    try:
+        privacy_manager.add_proxy(name, host, port, proxy_type)
+        console.print(f"[green]Added proxy {name}[/]")
+    except Exception as e:
+        console.print(f"[red]Error adding proxy: {str(e)}[/]")
+
+def handle_proxy_chain(proxy_names: List[str]) -> None:
+    """Handle proxy chain command."""
+    try:
+        privacy_manager.create_proxy_chain(proxy_names)
+        console.print(f"[green]Created proxy chain with {len(proxy_names)} proxies[/]")
+    except Exception as e:
+        console.print(f"[red]Error creating proxy chain: {str(e)}[/]")
+
+def handle_rate_limit(domain: str, requests_per_second: float) -> None:
+    """Handle rate limit command."""
+    try:
+        privacy_manager.set_rate_limit(domain, requests_per_second)
+        console.print(f"[green]Set rate limit for {domain} to {requests_per_second} requests/second[/]")
+    except Exception as e:
+        console.print(f"[red]Error setting rate limit: {str(e)}[/]")
+
+def handle_discord_command(parts: List[str]) -> None:
+    """Handle Discord-related commands."""
+    if len(parts) < 2:
+        console.print("[red]Invalid Discord command. Use 'discord help' for available commands.[/]")
+        return
+
+    subcommand = parts[1].lower()
+    
+    if subcommand == "help":
+        console.print("""
+[bold cyan]Discord Commands:[/]
+  discord enable          - Enable Discord integration
+  discord disable         - Disable Discord integration
+  discord set <url>       - Set webhook URL
+  discord save           - Save current webhook URL
+  discord test           - Send test message
+  discord status         - Show Discord integration status
+  discord summary        - Send scan activity summary
+  discord clear          - Clear scan history
+""")
+    elif subcommand == "enable":
+        global DISCORD_ENABLED
+        if not discord_manager.webhook_url:
+            webhook_url = Prompt.ask("Enter Discord webhook URL")
+            save = Prompt.ask("Save webhook URL?", choices=["y", "n"], default="n") == "y"
+            discord_manager.set_webhook(webhook_url, save)
+        DISCORD_ENABLED = True
+        console.print("[green]Discord integration enabled.[/]")
+        discord_manager.send_alert("Integration Enabled", "E502 OSINT Terminal Discord integration has been enabled.", "success")
+    elif subcommand == "disable":
+        global DISCORD_ENABLED
+        DISCORD_ENABLED = False
+        console.print("[yellow]Discord integration disabled.[/]")
+    elif subcommand == "set" and len(parts) > 2:
+        webhook_url = parts[2]
+        save = Prompt.ask("Save webhook URL?", choices=["y", "n"], default="n") == "y"
+        discord_manager.set_webhook(webhook_url, save)
+    elif subcommand == "save":
+        if discord_manager.webhook_url:
+            discord_manager.save_config()
+        else:
+            console.print("[red]No webhook URL configured to save.[/]")
+    elif subcommand == "test":
+        if discord_manager.webhook_url:
+            discord_manager.send_alert("Test Message", "This is a test message from E502 OSINT Terminal.", "info")
+        else:
+            console.print("[red]No webhook URL configured. Use 'discord set' to configure.[/]")
+    elif subcommand == "status":
+        status = "Enabled" if DISCORD_ENABLED else "Disabled"
+        webhook_status = "Configured" if discord_manager.webhook_url else "Not configured"
+        console.print(f"[bold]Discord Integration:[/] {status}")
+        console.print(f"[bold]Webhook Status:[/] {webhook_status}")
+    elif subcommand == "summary":
+        if DISCORD_ENABLED:
+            discord_manager.send_scan_summary()
+        else:
+            console.print("[red]Discord integration is disabled.[/]")
+    elif subcommand == "clear":
+        discord_manager.scan_history.clear()
+        console.print("[green]Scan history cleared.[/]")
+    else:
+        console.print("[red]Unknown Discord command. Use 'discord help' for available commands.[/]")
+
 def show_help() -> None:
     """Display help information."""
-    table = Table(title="Available Commands")
-    table.add_column("Command", style="cyan")
-    table.add_column("Description", style="green")
-    
-    commands = {
-        "help": "Display this help message",
-        "banner": "Display the E502 banner",
-        "whoami": "Display system information",
-        "dns <domain>": "Perform DNS lookup",
-        "whois <domain/IP>": "Perform WHOIS lookup",
-        "reverseip <ip>": "Perform reverse IP lookup",
-        "subdomains <domain>": "Find subdomains",
-        "leaks <email/domain>": "Check for potential data leaks",
-        "github <username/domain>": "Perform GitHub reconnaissance",
-        "headers <domain/URL>": "Check HTTP headers",
-        "ssl <domain>": "Check SSL certificate",
-        "scan <domain/IP>": "Perform port scan",
-        "proxy": "Enable/disable Tor proxy",
-        "clear": "Clear the screen",
-        "exit/quit": "Exit the program"
-    }
-    
-    for cmd, desc in commands.items():
-        table.add_row(cmd, desc)
-    
-    console.print(table)
+    help_text = """
+[bold cyan]E502 OSINT Terminal Commands:[/]
+
+[bold green]Network Analysis:[/]
+  network <target>     - Perform network topology mapping
+  arp <interface>      - Perform ARP scan on interface
+  fingerprint <target> - Perform device fingerprinting
+
+[bold green]Web Analysis:[/]
+  web <url>           - Analyze website technology stack
+  headers <url>       - Check security headers
+  waf <url>          - Detect web application firewall
+  cookies <url>       - Analyze cookie security
+
+[bold green]SSL/TLS Analysis:[/]
+  ssl <hostname>      - Analyze SSL/TLS configuration
+  cert <hostname>     - Check SSL certificate
+  ciphers <hostname>  - Analyze cipher suites
+  hsts <hostname>     - Check HSTS configuration
+
+[bold green]Vulnerability Assessment:[/]
+  vuln <target>       - Perform vulnerability scan
+  ports <target>      - Scan for open ports
+  services <target>   - Enumerate services
+  creds <target>      - Check default credentials
+
+[bold green]Privacy Features:[/]
+  proxy add <name> <host> <port> <type> - Add new proxy
+  proxy chain <proxy1> <proxy2> ...     - Create proxy chain
+  proxy status                           - Show proxy status
+  rate <domain> <requests/sec>          - Set rate limit
+  rotate                                - Rotate user agent
+
+[bold green]General Commands:[/]
+  help                 - Show this help message
+  clear                - Clear screen
+  exit                 - Exit program
+  version              - Show version information
+"""
+    console.print(Panel(help_text, title="Help", border_style="blue"))
 
 def main() -> None:
-    """Main entry point for the E502 OSINT Terminal.
-    
-    Handles command processing and execution of various reconnaissance functions.
-    Implements a clean, interactive command-line interface with rich formatting.
-    """
+    """Main function."""
     display_banner()
     
     while True:
         try:
-            command = Prompt.ask("\nE502>")
+            command = Prompt.ask(create_command_prompt())
             
             if not command:
                 continue
+                
+            parts = command.split()
+            cmd = parts[0].lower()
+            LAST_COMMAND = command
             
-            cmd_parts = command.split()
-            cmd = cmd_parts[0].lower()
-            
-            # Process commands
-            if cmd == "exit" or cmd == "quit":
-                console.print("[bold red]Goodbye![/]")
+            if cmd == "exit":
                 break
             elif cmd == "help":
                 show_help()
-            elif cmd == "banner":
-                display_banner()
-            elif cmd == "whoami":
-                info = get_system_info()
-                table = Table(title="System Information")
-                table.add_column("Field", style="cyan")
-                table.add_column("Value", style="green")
-                for key, value in info.items():
-                    table.add_row(key, value)
-                console.print(table)
-            elif cmd == "dns" and len(cmd_parts) > 1:
-                dns_lookup(cmd_parts[1])
-            elif cmd == "whois" and len(cmd_parts) > 1:
-                whois_lookup(cmd_parts[1])
-            elif cmd == "reverseip" and len(cmd_parts) > 1:
-                reverse_ip_lookup(cmd_parts[1])
-            elif cmd == "subdomains" and len(cmd_parts) > 1:
-                find_subdomains(cmd_parts[1])
-            elif cmd == "leaks" and len(cmd_parts) > 1:
-                check_leaks(cmd_parts[1])
-            elif cmd == "github" and len(cmd_parts) > 1:
-                github_recon(cmd_parts[1])
-            elif cmd == "headers" and len(cmd_parts) > 1:
-                check_headers(cmd_parts[1])
-            elif cmd == "ssl" and len(cmd_parts) > 1:
-                check_ssl(cmd_parts[1])
-            elif cmd == "scan" and len(cmd_parts) > 1:
-                scan_target(cmd_parts[1])
-            elif cmd == "proxy":
-                setup_proxy()
             elif cmd == "clear":
                 os.system('cls' if os.name == 'nt' else 'clear')
                 display_banner()
+            elif cmd == "version":
+                console.print(f"[bold green]Version:[/] {VERSION}")
+                console.print(f"[bold green]Author:[/] {AUTHOR}")
+            elif cmd == "discord":
+                handle_discord_command(parts)
+            elif cmd == "network" and len(parts) > 1:
+                with create_progress_bar("[bold blue]Performing network analysis...") as progress:
+                    task = progress.add_task("Scanning...", total=100)
+                    handle_network_scan(parts[1])
+                    progress.update(task, completed=100)
+            elif cmd == "web" and len(parts) > 1:
+                with create_progress_bar("[bold blue]Analyzing website...") as progress:
+                    task = progress.add_task("Scanning...", total=100)
+                    handle_web_analysis(parts[1])
+                    progress.update(task, completed=100)
+            elif cmd == "ssl" and len(parts) > 1:
+                with create_progress_bar("[bold blue]Analyzing SSL/TLS...") as progress:
+                    task = progress.add_task("Scanning...", total=100)
+                    handle_ssl_analysis(parts[1])
+                    progress.update(task, completed=100)
+            elif cmd == "vuln" and len(parts) > 1:
+                with create_progress_bar("[bold blue]Performing vulnerability scan...") as progress:
+                    task = progress.add_task("Scanning...", total=100)
+                    handle_vuln_scan(parts[1])
+                    progress.update(task, completed=100)
+            elif cmd == "proxy" and len(parts) > 1:
+                if parts[1] == "add" and len(parts) > 5:
+                    handle_add_proxy(parts[2], parts[3], int(parts[4]), parts[5])
+                elif parts[1] == "chain" and len(parts) > 2:
+                    handle_proxy_chain(parts[2:])
+                elif parts[1] == "status":
+                    handle_privacy_status()
+            elif cmd == "rate" and len(parts) > 2:
+                handle_rate_limit(parts[1], float(parts[2]))
             else:
-                console.print("[bold red]Unknown command. Type 'help' for available commands.[/]")
-        
+                console.print("[red]Unknown command. Type 'help' for available commands.[/]")
+                
         except KeyboardInterrupt:
-            console.print("\n[bold red]Use 'exit' or 'quit' to exit the program.[/]")
+            console.print("\n[yellow]Use 'exit' to quit.[/]")
         except Exception as e:
-            console.print(f"[bold red]Error: {str(e)}[/]")
+            console.print(f"[red]Error: {str(e)}[/]")
+            if DISCORD_ENABLED:
+                discord_manager.send_alert("Error", str(e), "error")
 
 if __name__ == "__main__":
     main() 

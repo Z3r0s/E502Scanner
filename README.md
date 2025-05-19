@@ -1,76 +1,132 @@
 # E502 OSINT Terminal
 
-An interactive OSINT (Open Source Intelligence) terminal tool written in Python. This tool provides various reconnaissance capabilities without relying on external APIs.
+A powerful, modular OSINT terminal built from scratch in Python. This tool provides comprehensive reconnaissance capabilities for security researchers and penetration testers.
 
 ## Features
 
-- DNS lookup and WHOIS information
-- Reverse IP lookup
-- Subdomain enumeration
-- Data leak checking
-- GitHub reconnaissance
-- HTTP headers and SSL certificate analysis
+### Network Analysis
+- Network topology mapping
+- ARP scanning for local network discovery
+- MAC address vendor lookup
+- Network device fingerprinting
+- Service enumeration
 - Port scanning
-- Tor proxy support
-- Beautiful terminal interface with rich formatting
+
+### Web Reconnaissance
+- Web technology stack detection
+- Content Security Policy (CSP) analysis
+- Web Application Firewall (WAF) detection
+- JavaScript library and framework detection
+- Cookie security analysis
+- Security header analysis
+
+### SSL/TLS Analysis
+- Cipher suite analysis
+- Certificate transparency log checking
+- SSL/TLS version support
+- HSTS policy analysis
+- Certificate chain validation
+- Security recommendations
+
+### Privacy Features
+- Multiple proxy support (not just Tor)
+- Proxy chain configuration
+- User agent rotation
+- Request rate limiting
+- IP rotation capabilities
+- Request history tracking
+
+### Vulnerability Assessment
+- Common vulnerability scanning
+- Security header analysis
+- Open port service enumeration
+- Default credential checking
+- Web vulnerability detection
+- Service misconfiguration detection
 
 ## Installation
 
-1. Clone this repository:
+1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/E502-OSINT.git
-cd E502-OSINT
+git clone https://github.com/yourusername/E502OSINT.git
+cd E502OSINT
 ```
 
-2. Install the required dependencies:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
-
-Run the tool:
+3. Run the tool:
 ```bash
 python E502OSINT.py
 ```
 
-### Available Commands
+## Usage
 
-- `help` - Display available commands
-- `banner` - Show the E502 banner
-- `whoami` - Display system information
-- `dns <domain>` - Perform DNS lookup
-- `whois <domain/IP>` - Perform WHOIS lookup
-- `reverseip <ip>` - Perform reverse IP lookup
-- `subdomains <domain>` - Find subdomains
-- `leaks <email/domain>` - Check for potential data leaks
-- `github <username/domain>` - Perform GitHub reconnaissance
-- `headers <domain/URL>` - Check HTTP headers
-- `ssl <domain>` - Check SSL certificate
-- `scan <domain/IP>` - Perform port scan
-- `proxy` - Enable/disable Tor proxy
-- `clear` - Clear the screen
-- `exit`/`quit` - Exit the program
+The E502 OSINT Terminal provides an interactive command-line interface. Here are some example commands:
 
-### Tor Proxy Support
+### Network Analysis
+```bash
+network <target>     # Perform network topology mapping
+arp <interface>      # Perform ARP scan on interface
+fingerprint <target> # Perform device fingerprinting
+```
 
-The tool supports routing requests through Tor SOCKS5 proxy (default: 127.0.0.1:9050). To use this feature:
+### Web Analysis
+```bash
+web <url>           # Analyze website technology stack
+headers <url>       # Check security headers
+waf <url>          # Detect web application firewall
+cookies <url>       # Analyze cookie security
+```
 
-1. Install Tor on your system
-2. Start the Tor service
-3. Use the `proxy` command in the tool to enable/disable proxying
+### SSL/TLS Analysis
+```bash
+ssl <hostname>      # Analyze SSL/TLS configuration
+cert <hostname>     # Check SSL certificate
+ciphers <hostname>  # Analyze cipher suites
+hsts <hostname>     # Check HSTS configuration
+```
+
+### Vulnerability Assessment
+```bash
+vuln <target>       # Perform vulnerability scan
+ports <target>      # Scan for open ports
+services <target>   # Enumerate services
+creds <target>      # Check default credentials
+```
+
+### Privacy Features
+```bash
+proxy add <name> <host> <port> <type> # Add new proxy
+proxy chain <proxy1> <proxy2> ...     # Create proxy chain
+proxy status                           # Show proxy status
+rate <domain> <requests/sec>          # Set rate limit
+rotate                                # Rotate user agent
+```
 
 ## Security Notice
 
-This tool is for educational and legitimate security research purposes only. Always:
-- Obtain proper authorization before scanning any systems
+This tool is designed for authorized security testing and research purposes only. Always:
+- Obtain proper authorization before testing any system
+- Follow responsible disclosure practices
 - Respect privacy and data protection laws
-- Use responsibly and ethically
+- Use the tool ethically and responsibly
 
-## Author
+## Contributing
 
-z3r0s / Error502
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Author
+
+- z3r0s / Error502
+
+## Acknowledgments
+
+- Thanks to all the open-source projects that made this tool possible
+- Special thanks to the security community for their continuous support 
