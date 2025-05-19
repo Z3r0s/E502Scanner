@@ -1,0 +1,8 @@
+rich
+art2text
+requests[socks]
+dnspython
+python-whois
+beautifulsoup4
+PySocks
+cryptography 
