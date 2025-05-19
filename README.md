@@ -48,7 +48,7 @@ A powerful, modular OSINT terminal built from scratch in Python. This tool provi
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/E502OSINT.git
+git clone https://github.com/Z3r0s/E502Scanner.git
 cd E502OSINT
 ```
 
