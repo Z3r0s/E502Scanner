@@ -1,5 +1,5 @@
 rich
-art2text
+text2art
 requests[socks]
 dnspython
 python-whois
