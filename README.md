@@ -66,6 +66,16 @@ A powerful, modular OSINT terminal built from scratch in Python. This tool provi
 - Pattern recognition
 - Cross-platform correlation
 
+### Discord Integration
+- Real-time scan result notifications
+- Rich embed formatting for results
+- Customizable webhook configuration
+- Scan history tracking
+- Alert system with severity levels
+- Automated reporting
+- Scan summaries
+- Activity monitoring
+
 ## Installation
 
 1. Clone the repository:
@@ -146,6 +156,19 @@ history <name>      # Track username history
 correlate <name>    # Map username relationships
 ```
 
+### Discord Integration
+```bash
+discord help        # Show Discord commands
+discord enable      # Enable Discord integration
+discord disable     # Disable Discord integration
+discord set <url>   # Set webhook URL
+discord save        # Save webhook configuration
+discord test        # Send test message
+discord status      # Show integration status
+discord summary     # Send scan activity summary
+discord clear       # Clear scan history
+```
+
 ## Security Notice
 
 This tool is designed for authorized security testing and research purposes only. Always:
@@ -164,7 +187,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Author
 
-- z3r0s / E502
+- z3r0s / Error502
 
 ## Acknowledgments
 
