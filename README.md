@@ -164,7 +164,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Author
 
-- z3r0s / Error502
+- z3r0s / E502
 
 ## Acknowledgments
 
