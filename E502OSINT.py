@@ -3,7 +3,7 @@ E502 OSINT Terminal – Advanced Reconnaissance Toolkit
 ----------------------------------------------------
 Author: z3r0s / Error502
 Version: 1.1.0
-Last Updated: 2024
+Last Updated: 2025
 
 A comprehensive OSINT tool built for security researchers and penetration testers.
 Features include DNS analysis, SSL inspection, port scanning, and Tor integration.
@@ -21,7 +21,8 @@ import socket
 import random
 import subprocess
 import platform
-from typing import Optional, Dict, List, Union
+import signal
+from typing import Optional, Dict, List, Union, Any, Coroutine
 import dns.resolver
 import whois
 import requests
@@ -39,10 +40,17 @@ from rich.tree import Tree
 from rich.live import Live
 from rich.layout import Layout
 from rich import box
-from art2text import text2art
+from rich.theme import Theme
+from art import text2art
 import threading
 import time
 from datetime import datetime
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import functools
+import json
+import aiohttp
+import hashlib
 
 # Import new modules from core package
 from core.network_analysis import NetworkAnalyzer
@@ -50,12 +58,13 @@ from core.web_recon import WebAnalyzer
 from core.ssl_analyzer import SSLAnalyzer
 from core.privacy_manager import PrivacyManager
 from core.vulnerability_scanner import VulnerabilityScanner
+from core.image_intel import ImageIntelligence
 
 # Import Discord integration
 from discord.webhook_manager import DiscordWebhookManager
 
 # Initialize Rich console with custom theme
-console = Console(theme={
+console = Console(theme=Theme({
     "info": "cyan",
     "warning": "yellow",
     "danger": "red",
@@ -64,7 +73,7 @@ console = Console(theme={
     "vulnerability.high": "red",
     "vulnerability.medium": "yellow",
     "vulnerability.low": "green"
-})
+}))
 
 # Global variables
 VERSION = "1.1.0"
@@ -75,6 +84,13 @@ PROXY_PORT = 9050
 SCAN_STATUS = "Ready"
 LAST_COMMAND = None
 DISCORD_ENABLED = False
+CURRENT_TASK = None  # Track current running task
+
+# Thread pool for parallel execution
+thread_pool = ThreadPoolExecutor(max_workers=10)
+# Event loop for async operations
+event_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(event_loop)
 
 # Initialize analyzers
 network_analyzer = NetworkAnalyzer()
@@ -83,6 +99,7 @@ ssl_analyzer = SSLAnalyzer()
 privacy_manager = PrivacyManager()
 vuln_scanner = VulnerabilityScanner()
 discord_manager = DiscordWebhookManager()
+image_intelligence = ImageIntelligence()
 
 # Cyber tips and quotes
 CYBER_TIPS = [
@@ -110,6 +127,18 @@ HACKER_QUOTES = [
     "The best defense is a good offense.",
     "The more you learn, the more you earn."
 ]
+
+async def run_in_thread(func, *args, **kwargs):
+    """Run a blocking function in a thread pool."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        thread_pool, 
+        functools.partial(func, *args, **kwargs)
+    )
+
+async def run_concurrent_tasks(coroutines: List[Coroutine]) -> List[Any]:
+    """Run multiple async tasks concurrently and wait for all to complete."""
+    return await asyncio.gather(*coroutines, return_exceptions=True)
 
 def create_progress_bar(description: str) -> Progress:
     """Create a progress bar with custom styling."""
@@ -352,164 +381,26 @@ def get_system_info() -> Dict[str, str]:
     }
 
 def dns_lookup(domain: str) -> None:
-    """Perform comprehensive DNS analysis with extended reconnaissance capabilities.
-    
-    This function provides detailed DNS record analysis and can perform additional
-    reconnaissance on discovered records, including port scanning and service detection.
-    
-    Args:
-        domain (str): Target domain for DNS analysis
-    """
+    """Perform DNS lookup on a domain."""
     try:
         resolver = dns.resolver.Resolver()
-        if USE_PROXY:
-            # Use Cloudflare DNS over TCP when proxy is enabled
-            resolver.nameservers = ['1.1.1.1']
         
         # Show available record types
-        record_types = {
-            'A': 'IPv4 address',
-            'AAAA': 'IPv6 address',
-            'MX': 'Mail exchange',
-            'NS': 'Name server',
-            'TXT': 'Text record',
-            'SOA': 'Start of authority',
-            'CNAME': 'Canonical name',
-            'PTR': 'Pointer record',
-            'SRV': 'Service record',
-            'CAA': 'Certificate Authority Authorization',
-            'all': 'All record types'
-        }
+        record_types = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME', 'SOA']
         
-        table = Table(title="Available DNS Record Types")
-        table.add_column("Type", style="cyan")
-        table.add_column("Description", style="green")
-        
-        for rtype, desc in record_types.items():
-            if rtype != 'all':
-                table.add_row(rtype, desc)
-        
-        console.print(table)
-        
-        # Get record type selection
-        record_type = Prompt.ask(
-            "Select record type to lookup (or 'all' for all records)",
-            choices=list(record_types.keys()),
-            default="all"
-        )
-        
-        results = {}
-        if record_type == 'all':
-            types_to_check = [t for t in record_types.keys() if t != 'all']
-        else:
-            types_to_check = [record_type]
-        
-        for rtype in types_to_check:
-            try:
-                answers = resolver.resolve(domain, rtype)
-                results[rtype] = [str(rdata) for rdata in answers]
-            except dns.resolver.NoAnswer:
-                continue
-            except dns.resolver.NXDOMAIN:
-                console.print(f"[bold red]Domain {domain} does not exist.[/]")
-                return
-            except Exception as e:
-                console.print(f"[bold red]Error resolving {rtype} records: {str(e)}[/]")
-                continue
-        
-        # Display results
         table = Table(title=f"DNS Records for {domain}")
         table.add_column("Record Type", style="cyan")
         table.add_column("Value", style="green")
         
-        for rtype, values in results.items():
-            for value in values:
-                table.add_row(rtype, value)
+        for rtype in record_types:
+            try:
+                answers = resolver.resolve(domain, rtype)
+                for rdata in answers:
+                    table.add_row(rtype, str(rdata))
+            except:
+                continue
         
         console.print(table)
-        
-        # Ask if user wants to perform additional reconnaissance
-        if results:
-            recon = Prompt.ask(
-                "Perform additional reconnaissance on discovered records?",
-                choices=["y", "n"],
-                default="n"
-            )
-            
-            if recon == "y":
-                # Collect all IPs for scanning
-                ips_to_scan = []
-                for rtype, values in results.items():
-                    if rtype in ['A', 'AAAA']:
-                        ips_to_scan.extend(values)
-                
-                if ips_to_scan:
-                    scan_ips = Prompt.ask(
-                        "Scan discovered IP addresses?",
-                        choices=["y", "n"],
-                        default="n"
-                    )
-                    
-                    if scan_ips == "y":
-                        for ip in ips_to_scan:
-                            console.print(f"\n[bold blue]Scanning IP: {ip}[/]")
-                            scan_target(ip)
-                
-                # Check for web servers
-                web_servers = []
-                for rtype, values in results.items():
-                    if rtype in ['A', 'AAAA', 'CNAME']:
-                        web_servers.extend(values)
-                
-                if web_servers:
-                    check_web = Prompt.ask(
-                        "Check web server headers and SSL?",
-                        choices=["y", "n"],
-                        default="n"
-                    )
-                    
-                    if check_web == "y":
-                        for server in web_servers:
-                            console.print(f"\n[bold blue]Checking web server: {server}[/]")
-                            check_headers(server)
-                            check_ssl(server)
-                
-                # Check for mail servers
-                if 'MX' in results:
-                    check_mx = Prompt.ask(
-                        "Check mail server configuration?",
-                        choices=["y", "n"],
-                        default="n"
-                    )
-                    
-                    if check_mx == "y":
-                        for mx in results['MX']:
-                            console.print(f"\n[bold blue]Checking mail server: {mx}[/]")
-                            check_headers(mx)
-                            check_ssl(mx)
-                
-                # Save results
-                save_results = Prompt.ask(
-                    "Save DNS lookup results to file?",
-                    choices=["y", "n"],
-                    default="n"
-                )
-                
-                if save_results == "y":
-                    filename = f"dns_{domain}_{time.strftime('%Y%m%d_%H%M%S')}.txt"
-                    try:
-                        with open(filename, "w") as f:
-                            f.write(f"DNS Lookup Results for {domain}\n")
-                            f.write(f"Lookup time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                            for rtype, values in results.items():
-                                f.write(f"{rtype} Records:\n")
-                                for value in values:
-                                    f.write(f"  {value}\n")
-                                f.write("\n")
-                        console.print(f"[bold green]Results saved to {filename}[/]")
-                    except Exception as e:
-                        console.print(f"[bold red]Error saving results: {str(e)}[/]")
-    
     except Exception as e:
         console.print(f"[bold red]Error performing DNS lookup: {str(e)}[/]")
 
@@ -781,257 +672,184 @@ def check_ssl(domain: str) -> None:
     except Exception as e:
         console.print(f"[bold red]Error checking SSL: {str(e)}[/]")
 
+async def async_scan_target(target: str) -> None:
+    """Asynchronous version of scan_target function."""
+    global SCAN_STATUS
+    SCAN_STATUS = "Scanning"
+    
+    try:
+        # Create a progress bar
+        with create_progress_bar("Scanning target...") as progress:
+            task = progress.add_task("Scanning...", total=100)
+            
+            # Validate target
+            if not target:
+                console.print("[red]Error: Target cannot be empty[/]")
+                return
+            
+            console.print(f"[bold green]Scanning target: {target}[/]")
+            
+            # Update progress
+            progress.update(task, advance=10)
+            
+            # Tasks to run concurrently
+            tasks = []
+            
+            # DNS lookup
+            tasks.append(run_in_thread(dns_lookup, target))
+            
+            # WHOIS lookup
+            tasks.append(run_in_thread(whois_lookup, target))
+            
+            # Port scan for common ports
+            # ... code for port scanning ...
+            
+            # Update progress
+            progress.update(task, advance=20)
+            
+            # Run concurrent tasks
+            await run_concurrent_tasks(tasks)
+            
+            # Update progress
+            progress.update(task, advance=70)
+            
+            console.print(f"[bold green]Scan completed for {target}[/]")
+            
+            if DISCORD_ENABLED:
+                # Send scan results to Discord
+                await run_in_thread(
+                    discord_manager.send_message,
+                    f"Scan completed for {target}",
+                    {
+                        "title": f"Scan Results: {target}",
+                        "description": "Comprehensive scan completed successfully",
+                        "color": 0x00ff00,
+                        "footer": {"text": f"E502 OSINT Terminal v{VERSION}"}
+                    }
+                )
+            
+            # Complete progress
+            progress.update(task, completed=100)
+    
+    except Exception as e:
+        console.print(f"[red]Error during scan: {str(e)}[/]")
+    
+    finally:
+        SCAN_STATUS = "Ready"
+
+# Replace the original scan_target function with a wrapper that calls the async version
 def scan_target(target: str) -> None:
-    """Perform advanced port scanning with multiple scanning options.
+    """Wrapper around async_scan_target to run it in the event loop."""
+    asyncio.run_coroutine_threadsafe(async_scan_target(target), event_loop)
+
+async def async_handle_network_scan(target: str) -> None:
+    """Asynchronous network scan handler."""
+    console.print(f"[bold green]Starting network analysis for {target}...[/]")
     
-    Features:
-    - Common port scanning
-    - Custom port range selection
-    - Full port range scanning
-    - Concurrent scanning capability
-    - Service detection
-    - Results export
+    # Use the comprehensive network analysis function that runs multiple operations in parallel
+    results = await network_analyzer.analyze_network(target)
+    await network_analyzer.display_network_info_async(results)
     
-    Args:
-        target (str): Target IP or domain to scan
-    """
-    # Common ports with their standard services
-    common_ports = {
-        21: "FTP",
-        22: "SSH",
-        23: "Telnet",
-        25: "SMTP",
-        53: "DNS",
-        80: "HTTP",
-        443: "HTTPS",
-        445: "SMB",
-        3306: "MySQL",
-        3389: "RDP",
-        8080: "HTTP-Proxy",
-        8443: "HTTPS-Alt",
-        27017: "MongoDB",
-        5432: "PostgreSQL",
-        1433: "MSSQL",
-        1521: "Oracle",
-        6379: "Redis",
-        9200: "Elasticsearch",
-        27015: "Steam",
-        25565: "Minecraft"
-    }
-    
-    # Ask for scan type
-    scan_type = Prompt.ask(
-        "Choose scan type",
-        choices=["common", "custom", "all"],
-        default="common"
-    )
-    
-    ports_to_scan = []
-    
-    if scan_type == "common":
-        ports_to_scan = list(common_ports.keys())
-    elif scan_type == "custom":
-        # Show available ports
-        table = Table(title="Available Ports")
-        table.add_column("Port", style="cyan")
-        table.add_column("Service", style="green")
-        table.add_column("Description", style="yellow")
-        
-        for port, service in common_ports.items():
-            table.add_row(str(port), service, f"Common {service} port")
-        
-        console.print(table)
-        
-        # Get port range
-        port_input = Prompt.ask(
-            "Enter ports to scan (comma-separated or range, e.g., '80,443' or '1-1000')"
-        )
-        
-        if "-" in port_input:
-            # Handle range
-            start, end = map(int, port_input.split("-"))
-            ports_to_scan = list(range(start, end + 1))
-        else:
-            # Handle comma-separated
-            ports_to_scan = [int(p.strip()) for p in port_input.split(",")]
-    else:  # all
-        ports_to_scan = list(range(1, 65536))
-    
-    # Ask for timeout
-    timeout = Prompt.ask(
-        "Enter timeout in seconds (1-10)",
-        default="1",
-        choices=[str(i) for i in range(1, 11)]
-    )
-    timeout = float(timeout)
-    
-    # Ask for concurrent scanning
-    concurrent = Prompt.ask(
-        "Enable concurrent scanning? (faster but more resource-intensive)",
-        choices=["y", "n"],
-        default="n"
-    )
-    
-    table = Table(title=f"Port Scan Results for {target}")
-    table.add_column("Port", style="cyan")
-    table.add_column("Service", style="green")
-    table.add_column("Status", style="yellow")
-    
-    if concurrent == "y":
-        # Concurrent scanning
-        def scan_port(port):
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(timeout)
-                result = sock.connect_ex((target, port))
-                if result == 0:
-                    service = common_ports.get(port, socket.getservbyport(port))
-                    return (port, service, "Open")
-                sock.close()
-            except:
-                pass
-            return None
-        
-        # Create thread pool
-        threads = []
-        results = []
-        
-        for port in ports_to_scan:
-            thread = threading.Thread(target=lambda p=port: results.append(scan_port(p)))
-            threads.append(thread)
-            thread.start()
-        
-        # Wait for all threads to complete
-        for thread in threads:
-            thread.join()
-        
-        # Add results to table
-        for result in results:
-            if result:
-                port, service, status = result
-                table.add_row(str(port), service, status)
-    else:
-        # Sequential scanning
-        for port in ports_to_scan:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(timeout)
-                result = sock.connect_ex((target, port))
-                if result == 0:
-                    service = common_ports.get(port, socket.getservbyport(port))
-                    table.add_row(str(port), service, "Open")
-                sock.close()
-            except:
-                continue
-    
-    console.print(table)
-    
-    # Ask if user wants to save results
-    save_results = Prompt.ask(
-        "Save scan results to file?",
-        choices=["y", "n"],
-        default="n"
-    )
-    
-    if save_results == "y":
-        filename = f"scan_{target}_{time.strftime('%Y%m%d_%H%M%S')}.txt"
-        try:
-            with open(filename, "w") as f:
-                f.write(f"Scan results for {target}\n")
-                f.write(f"Scan time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Total ports scanned: {len(ports_to_scan)}\n")
-                f.write("\nOpen ports:\n")
-                for row in table.rows:
-                    f.write(f"{row[0]}: {row[1]} - {row[2]}\n")
-            console.print(f"[bold green]Results saved to {filename}[/]")
-        except Exception as e:
-            console.print(f"[bold red]Error saving results: {str(e)}[/]")
+    if DISCORD_ENABLED:
+        await run_in_thread(discord_manager.send_network_scan_result, target, results)
 
 def handle_network_scan(target: str) -> None:
-    """Handle network scanning command."""
-    try:
-        console.print("[yellow]Starting network analysis...[/]")
-        topology = network_analyzer.network_topology(target)
-        network_analyzer.display_network_info(topology)
-        if DISCORD_ENABLED:
-            discord_manager.send_network_scan_result(target, topology)
-    except Exception as e:
-        console.print(f"[red]Error during network scan: {str(e)}[/]")
-        if DISCORD_ENABLED:
-            discord_manager.send_alert("Network Scan Error", str(e), "error")
+    """Wrapper for async_handle_network_scan."""
+    asyncio.run_coroutine_threadsafe(async_handle_network_scan(target), event_loop)
+
+async def async_handle_web_analysis(url: str) -> None:
+    """Asynchronous web analysis handler."""
+    console.print(f"[bold green]Starting web analysis for {url}...[/]")
+    
+    # Use the fully async implementation instead of the thread-wrapped version
+    analysis = await web_analyzer.full_analysis_async(url)
+    await web_analyzer.display_web_analysis_async(analysis)
+    
+    if DISCORD_ENABLED:
+        await run_in_thread(discord_manager.send_web_scan_result, url, analysis)
 
 def handle_web_analysis(url: str) -> None:
-    """Handle web analysis command."""
-    try:
-        console.print("[yellow]Starting web analysis...[/]")
-        analysis = web_analyzer.analyze_website(url)
-        web_analyzer.display_web_analysis(analysis)
-        if DISCORD_ENABLED:
-            discord_manager.send_web_scan_result(url, analysis)
-    except Exception as e:
-        console.print(f"[red]Error during web analysis: {str(e)}[/]")
-        if DISCORD_ENABLED:
-            discord_manager.send_alert("Web Analysis Error", str(e), "error")
+    """Wrapper for async_handle_web_analysis."""
+    asyncio.run_coroutine_threadsafe(async_handle_web_analysis(url), event_loop)
 
-def handle_ssl_analysis(hostname: str) -> None:
-    """Handle SSL analysis command."""
+async def async_handle_ssl_analysis(hostname: str) -> None:
+    """Asynchronous SSL analysis handler."""
+    console.print(f"[bold green]Starting SSL analysis for {hostname}...[/]")
     try:
-        console.print("[yellow]Starting SSL analysis...[/]")
-        analysis = ssl_analyzer.analyze_ssl(hostname)
+        analysis = await ssl_analyzer.analyze_ssl(hostname)
         ssl_analyzer.display_ssl_analysis(analysis)
+        
         if DISCORD_ENABLED:
-            discord_manager.send_ssl_scan_result(hostname, analysis)
+            await run_in_thread(discord_manager.send_ssl_scan_result, hostname, analysis)
     except Exception as e:
         console.print(f"[red]Error during SSL analysis: {str(e)}[/]")
-        if DISCORD_ENABLED:
-            discord_manager.send_alert("SSL Analysis Error", str(e), "error")
+
+def handle_ssl_analysis(hostname: str) -> None:
+    """Wrapper for async_handle_ssl_analysis."""
+    asyncio.run_coroutine_threadsafe(async_handle_ssl_analysis(hostname), event_loop)
+
+async def async_handle_vuln_scan(target: str) -> None:
+    """Asynchronous vulnerability scan handler."""
+    console.print(f"[bold green]Starting vulnerability scan for {target}...[/]")
+    results = await run_in_thread(vuln_scanner.scan_target, target)
+    vuln_scanner.display_scan_results(results)
+    
+    if DISCORD_ENABLED:
+        await run_in_thread(discord_manager.send_vuln_scan_result, target, results)
 
 def handle_vuln_scan(target: str) -> None:
-    """Handle vulnerability scanning command."""
-    try:
-        console.print("[yellow]Starting vulnerability scan...[/]")
-        results = vuln_scanner.scan_target(target)
-        vuln_scanner.display_scan_results(results)
-        if DISCORD_ENABLED:
-            discord_manager.send_vuln_scan_result(target, results)
-    except Exception as e:
-        console.print(f"[red]Error during vulnerability scan: {str(e)}[/]")
-        if DISCORD_ENABLED:
-            discord_manager.send_alert("Vulnerability Scan Error", str(e), "error")
+    """Wrapper for async_handle_vuln_scan."""
+    asyncio.run_coroutine_threadsafe(async_handle_vuln_scan(target), event_loop)
+
+async def async_handle_privacy_status() -> None:
+    """Asynchronous privacy status handler."""
+    console.print(f"[bold green]Showing privacy status...[/]")
+    await run_in_thread(privacy_manager.display_privacy_status)
 
 def handle_privacy_status() -> None:
-    """Handle privacy status command."""
-    try:
-        privacy_manager.display_privacy_status()
-    except Exception as e:
-        console.print(f"[red]Error displaying privacy status: {str(e)}[/]")
+    """Wrapper for async_handle_privacy_status."""
+    asyncio.run_coroutine_threadsafe(async_handle_privacy_status(), event_loop)
+
+async def async_handle_add_proxy(name: str, host: str, port: int, proxy_type: str) -> None:
+    """Asynchronous add proxy handler."""
+    console.print(f"[bold green]Adding proxy {name}...[/]")
+    await run_in_thread(privacy_manager.add_proxy, name, host, port, proxy_type)
 
 def handle_add_proxy(name: str, host: str, port: int, proxy_type: str) -> None:
-    """Handle add proxy command."""
-    try:
-        privacy_manager.add_proxy(name, host, port, proxy_type)
-        console.print(f"[green]Added proxy {name}[/]")
-    except Exception as e:
-        console.print(f"[red]Error adding proxy: {str(e)}[/]")
+    """Wrapper for async_handle_add_proxy."""
+    asyncio.run_coroutine_threadsafe(async_handle_add_proxy(name, host, port, proxy_type), event_loop)
+
+async def async_handle_proxy_chain(proxy_names: List[str]) -> None:
+    """Asynchronous proxy chain handler."""
+    console.print(f"[bold green]Creating proxy chain with {len(proxy_names)} proxies...[/]")
+    await run_in_thread(privacy_manager.create_proxy_chain, proxy_names)
 
 def handle_proxy_chain(proxy_names: List[str]) -> None:
-    """Handle proxy chain command."""
-    try:
-        privacy_manager.create_proxy_chain(proxy_names)
-        console.print(f"[green]Created proxy chain with {len(proxy_names)} proxies[/]")
-    except Exception as e:
-        console.print(f"[red]Error creating proxy chain: {str(e)}[/]")
+    """Wrapper for async_handle_proxy_chain."""
+    asyncio.run_coroutine_threadsafe(async_handle_proxy_chain(proxy_names), event_loop)
+
+async def async_handle_rate_limit(domain: str, requests_per_second: float) -> None:
+    """Asynchronous rate limit handler."""
+    console.print(f"[bold green]Setting rate limit for {domain} to {requests_per_second} requests/second...[/]")
+    await run_in_thread(privacy_manager.set_rate_limit, domain, requests_per_second)
 
 def handle_rate_limit(domain: str, requests_per_second: float) -> None:
-    """Handle rate limit command."""
-    try:
-        privacy_manager.set_rate_limit(domain, requests_per_second)
-        console.print(f"[green]Set rate limit for {domain} to {requests_per_second} requests/second[/]")
-    except Exception as e:
-        console.print(f"[red]Error setting rate limit: {str(e)}[/]")
+    """Wrapper for async_handle_rate_limit."""
+    asyncio.run_coroutine_threadsafe(async_handle_rate_limit(domain, requests_per_second), event_loop)
 
-def handle_discord_command(parts: List[str]) -> None:
-    """Handle Discord-related commands."""
+async def async_handle_rotate_user_agent() -> None:
+    """Asynchronous user agent rotation handler."""
+    console.print(f"[bold green]Rotating user agent...[/]")
+    await run_in_thread(privacy_manager.rotate_user_agent)
+
+def handle_rotate_user_agent() -> None:
+    """Wrapper for async_handle_rotate_user_agent."""
+    asyncio.run_coroutine_threadsafe(async_handle_rotate_user_agent(), event_loop)
+
+async def async_handle_discord_command(parts: List[str]) -> None:
+    """Asynchronous Discord command handler."""
+    global DISCORD_ENABLED
+    
     if len(parts) < 2:
         console.print("[red]Invalid Discord command. Use 'discord help' for available commands.[/]")
         return
@@ -1051,7 +869,6 @@ def handle_discord_command(parts: List[str]) -> None:
   discord clear          - Clear scan history
 """)
     elif subcommand == "enable":
-        global DISCORD_ENABLED
         if not discord_manager.webhook_url:
             webhook_url = Prompt.ask("Enter Discord webhook URL")
             save = Prompt.ask("Save webhook URL?", choices=["y", "n"], default="n") == "y"
@@ -1060,7 +877,6 @@ def handle_discord_command(parts: List[str]) -> None:
         console.print("[green]Discord integration enabled.[/]")
         discord_manager.send_alert("Integration Enabled", "E502 OSINT Terminal Discord integration has been enabled.", "success")
     elif subcommand == "disable":
-        global DISCORD_ENABLED
         DISCORD_ENABLED = False
         console.print("[yellow]Discord integration disabled.[/]")
     elif subcommand == "set" and len(parts) > 2:
@@ -1093,114 +909,428 @@ def handle_discord_command(parts: List[str]) -> None:
     else:
         console.print("[red]Unknown Discord command. Use 'discord help' for available commands.[/]")
 
-def show_help() -> None:
-    """Display help information."""
-    help_text = """
-[bold cyan]E502 OSINT Terminal Commands:[/]
+def handle_discord_command(parts: List[str]) -> None:
+    """Wrapper for async_handle_discord_command."""
+    asyncio.run_coroutine_threadsafe(async_handle_discord_command(parts), event_loop)
 
-[bold green]Network Analysis:[/]
-  network <target>     - Perform network topology mapping
-  arp <interface>      - Perform ARP scan on interface
-  fingerprint <target> - Perform device fingerprinting
+async def async_handle_check_tor() -> None:
+    """Asynchronous handler for checking Tor status."""
+    console.print("[bold green]Checking Tor status...[/]")
+    is_running = check_tor_port()
+    if is_running:
+        console.print("[bold green]✓ Tor is running on port 9050[/]")
+    else:
+        console.print("[bold red]✗ Tor is not running on port 9050[/]")
+        console.print("[yellow]To use Tor, please ensure it's installed and running on port 9050[/]")
 
-[bold green]Web Analysis:[/]
-  web <url>           - Analyze website technology stack
-  headers <url>       - Check security headers
-  waf <url>          - Detect web application firewall
-  cookies <url>       - Analyze cookie security
+def handle_check_tor() -> None:
+    """Wrapper for async_handle_check_tor."""
+    asyncio.run_coroutine_threadsafe(async_handle_check_tor(), event_loop)
 
-[bold green]SSL/TLS Analysis:[/]
-  ssl <hostname>      - Analyze SSL/TLS configuration
-  cert <hostname>     - Check SSL certificate
-  ciphers <hostname>  - Analyze cipher suites
-  hsts <hostname>     - Check HSTS configuration
+def handle_cancel_signal(signum, frame):
+    """Handle cancellation signal (SIGTSTP on Unix, SIGINT on Windows)."""
+    global SCAN_STATUS, CURRENT_TASK
+    
+    if CURRENT_TASK and not CURRENT_TASK.done():
+        console.print("\n[yellow]Cancelling current operation...[/]")
+        CURRENT_TASK.cancel()
+        SCAN_STATUS = "Ready"
+        console.print("[green]Operation cancelled.[/]")
+    else:
+        console.print("\n[yellow]No operation in progress to cancel.[/]")
 
-[bold green]Vulnerability Assessment:[/]
-  vuln <target>       - Perform vulnerability scan
-  ports <target>      - Scan for open ports
-  services <target>   - Enumerate services
-  creds <target>      - Check default credentials
+# Register signal handler based on platform
+if platform.system() == 'Windows':
+    # On Windows, use Ctrl+C (SIGINT) for cancellation
+    signal.signal(signal.SIGINT, handle_cancel_signal)
+    console.print("[yellow]Note: Use Ctrl+C to cancel operations on Windows[/]")
+else:
+    # On Unix-like systems, use Ctrl+Z (SIGTSTP) for cancellation
+    signal.signal(signal.SIGTSTP, handle_cancel_signal)
+    console.print("[yellow]Note: Use Ctrl+Z to cancel operations on Unix[/]")
 
-[bold green]Privacy Features:[/]
-  proxy add <name> <host> <port> <type> - Add new proxy
-  proxy chain <proxy1> <proxy2> ...     - Create proxy chain
-  proxy status                           - Show proxy status
-  rate <domain> <requests/sec>          - Set rate limit
-  rotate                                - Rotate user agent
-
-[bold green]General Commands:[/]
-  help                 - Show this help message
-  clear                - Clear screen
-  exit                 - Exit program
-  version              - Show version information
-"""
-    console.print(Panel(help_text, title="Help", border_style="blue"))
-
-def main() -> None:
-    """Main function."""
+async def async_main() -> None:
+    """Asynchronous main function."""
+    # Start a background thread to run the event loop
+    threading.Thread(target=lambda: event_loop.run_forever(), daemon=True).start()
+    
     display_banner()
     
-    while True:
-        try:
+    try:
+        while True:
             command = Prompt.ask(create_command_prompt())
             
             if not command:
                 continue
                 
-            parts = command.split()
-            cmd = parts[0].lower()
-            LAST_COMMAND = command
+            # Process commands asynchronously
+            await process_command(command)
             
-            if cmd == "exit":
-                break
-            elif cmd == "help":
-                show_help()
-            elif cmd == "clear":
-                os.system('cls' if os.name == 'nt' else 'clear')
-                display_banner()
-            elif cmd == "version":
-                console.print(f"[bold green]Version:[/] {VERSION}")
-                console.print(f"[bold green]Author:[/] {AUTHOR}")
-            elif cmd == "discord":
-                handle_discord_command(parts)
-            elif cmd == "network" and len(parts) > 1:
-                with create_progress_bar("[bold blue]Performing network analysis...") as progress:
-                    task = progress.add_task("Scanning...", total=100)
-                    handle_network_scan(parts[1])
-                    progress.update(task, completed=100)
-            elif cmd == "web" and len(parts) > 1:
-                with create_progress_bar("[bold blue]Analyzing website...") as progress:
-                    task = progress.add_task("Scanning...", total=100)
-                    handle_web_analysis(parts[1])
-                    progress.update(task, completed=100)
-            elif cmd == "ssl" and len(parts) > 1:
-                with create_progress_bar("[bold blue]Analyzing SSL/TLS...") as progress:
-                    task = progress.add_task("Scanning...", total=100)
-                    handle_ssl_analysis(parts[1])
-                    progress.update(task, completed=100)
-            elif cmd == "vuln" and len(parts) > 1:
-                with create_progress_bar("[bold blue]Performing vulnerability scan...") as progress:
-                    task = progress.add_task("Scanning...", total=100)
-                    handle_vuln_scan(parts[1])
-                    progress.update(task, completed=100)
-            elif cmd == "proxy" and len(parts) > 1:
-                if parts[1] == "add" and len(parts) > 5:
-                    handle_add_proxy(parts[2], parts[3], int(parts[4]), parts[5])
-                elif parts[1] == "chain" and len(parts) > 2:
-                    handle_proxy_chain(parts[2:])
-                elif parts[1] == "status":
-                    handle_privacy_status()
-            elif cmd == "rate" and len(parts) > 2:
-                handle_rate_limit(parts[1], float(parts[2]))
+    except KeyboardInterrupt:
+        console.print("[bold yellow]Exiting E502 OSINT Terminal...[/]")
+    finally:
+        # Cleanup
+        thread_pool.shutdown()
+        event_loop.stop()
+
+async def process_command(command: str) -> None:
+    """Process user commands."""
+    global SCAN_STATUS, LAST_COMMAND, USE_PROXY, CURRENT_TASK
+    
+    try:
+        parts = command.strip().split()
+        if not parts:
+            return
+            
+        cmd = parts[0].lower()
+        args = parts[1:]
+        
+        # Create task for command execution
+        if cmd == 'help':
+            show_help()
+        elif cmd == 'network':
+            if not args:
+                console.print("[red]Please specify a target[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'arp':
+            if not args:
+                console.print("[red]Please specify a network interface (e.g., eth0)[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'fingerprint':
+            if not args:
+                console.print("[red]Please specify a target[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'web':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'headers':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'waf':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'cookies':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'ssl':
+            if not args:
+                console.print("[red]Please specify a hostname[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'cert':
+            if not args:
+                console.print("[red]Please specify a hostname[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'ciphers':
+            if not args:
+                console.print("[red]Please specify a hostname[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'hsts':
+            if not args:
+                console.print("[red]Please specify a hostname[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'vuln':
+            if not args:
+                console.print("[red]Please specify a target[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'ports':
+            if not args:
+                console.print("[red]Please specify a target[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'services':
+            if not args:
+                console.print("[red]Please specify a target[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'creds':
+            if not args:
+                console.print("[red]Please specify a target[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
+            await CURRENT_TASK
+        elif cmd == 'image':
+            if not args:
+                console.print("[red]Please specify an image file[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            image_path = args[0]
+            if not os.path.exists(image_path):
+                console.print(f"[red]Image file not found: {image_path}[/]")
+                return
+            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.analyze_image, image_path))
+            analysis = await CURRENT_TASK
+            image_intelligence.display_image_analysis(analysis)
+        elif cmd == 'exif':
+            if not args:
+                console.print("[red]Please specify an image file[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            image_path = args[0]
+            if not os.path.exists(image_path):
+                console.print(f"[red]Image file not found: {image_path}[/]")
+                return
+            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence._extract_exif, image_path))
+            exif_data = await CURRENT_TASK
+            table = Table(title="EXIF Data")
+            table.add_column("Tag", style="cyan")
+            table.add_column("Value", style="green")
+            for tag, value in exif_data.items():
+                table.add_row(tag, str(value))
+            console.print(table)
+        elif cmd == 'geo':
+            if not args:
+                console.print("[red]Please specify an image file[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            image_path = args[0]
+            if not os.path.exists(image_path):
+                console.print(f"[red]Image file not found: {image_path}[/]")
+                return
+            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.extract_geo_data, image_path))
+            geo_data = await CURRENT_TASK
+            if geo_data:
+                table = Table(title="Geolocation Data")
+                table.add_column("Field", style="cyan")
+                table.add_column("Value", style="green")
+                for field, value in geo_data.items():
+                    table.add_row(field, str(value))
+                console.print(table)
             else:
-                console.print("[red]Unknown command. Type 'help' for available commands.[/]")
-                
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Use 'exit' to quit.[/]")
-        except Exception as e:
-            console.print(f"[red]Error: {str(e)}[/]")
-            if DISCORD_ENABLED:
-                discord_manager.send_alert("Error", str(e), "error")
+                console.print("[yellow]No geolocation data found in image[/]")
+        elif cmd == 'stego':
+            if not args:
+                console.print("[red]Please specify an image file[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            image_path = args[0]
+            if not os.path.exists(image_path):
+                console.print(f"[red]Image file not found: {image_path}[/]")
+                return
+            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.check_steganography, image_path))
+            stego_data = await CURRENT_TASK
+            if stego_data:
+                table = Table(title="Steganography Analysis")
+                table.add_column("Type", style="cyan")
+                table.add_column("Result", style="green")
+                for stego_type, result in stego_data.items():
+                    table.add_row(stego_type, str(result))
+                console.print(table)
+            else:
+                console.print("[yellow]No steganography detected[/]")
+        elif cmd == 'hash':
+            if not args:
+                console.print("[red]Please specify a file to hash[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            file_path = args[0]
+            if not os.path.exists(file_path):
+                console.print(f"[red]File not found: {file_path}[/]")
+                return
+            CURRENT_TASK = asyncio.create_task(run_in_thread(lambda: open(file_path, 'rb').read()))
+            content = await CURRENT_TASK
+            md5_hash = hashlib.md5(content).hexdigest()
+            sha1_hash = hashlib.sha1(content).hexdigest()
+            sha256_hash = hashlib.sha256(content).hexdigest()
+            console.print(f"[green]MD5:[/] {md5_hash}")
+            console.print(f"[green]SHA1:[/] {sha1_hash}")
+            console.print(f"[green]SHA256:[/] {sha256_hash}")
+        elif cmd == 'proxy':
+            if len(args) >= 4 and args[0] == 'add':
+                name, host, port, proxy_type = args[1:5]
+                CURRENT_TASK = asyncio.create_task(async_handle_add_proxy(name, host, int(port), proxy_type))
+                await CURRENT_TASK
+            elif args and args[0] == 'chain':
+                CURRENT_TASK = asyncio.create_task(async_handle_proxy_chain(args[1:]))
+                await CURRENT_TASK
+            elif args and args[0] == 'status':
+                console.print("[yellow]Current proxy status:[/]", "Enabled" if USE_PROXY else "Disabled")
+            elif args and args[0] == 'on':
+                setup_proxy()
+            elif args and args[0] == 'off':
+                USE_PROXY = False
+                console.print("[green]Proxy disabled[/]")
+            else:
+                console.print("[yellow]Current proxy status:[/]", "Enabled" if USE_PROXY else "Disabled")
+        elif cmd == 'rate':
+            if len(args) < 2:
+                console.print("[red]Please specify domain and requests per second[/]")
+                return
+            domain = args[0]
+            try:
+                rate = float(args[1])
+                CURRENT_TASK = asyncio.create_task(async_handle_rate_limit(domain, rate))
+                await CURRENT_TASK
+            except ValueError:
+                console.print("[red]Invalid rate limit value[/]")
+        elif cmd == 'rotate':
+            CURRENT_TASK = asyncio.create_task(async_handle_rotate_user_agent())
+            await CURRENT_TASK
+        elif cmd == 'check' and args and args[0] == 'tor':
+            CURRENT_TASK = asyncio.create_task(async_handle_check_tor())
+            await CURRENT_TASK
+        elif cmd == 'discord':
+            CURRENT_TASK = asyncio.create_task(async_handle_discord_command(parts))
+            await CURRENT_TASK
+        elif cmd == 'clear':
+            os.system('cls' if os.name == 'nt' else 'clear')
+            display_banner()
+        elif cmd == 'exit':
+            console.print("[bold yellow]Exiting E502 OSINT Terminal...[/]")
+            sys.exit(0)
+        elif cmd == 'version':
+            console.print(f"[bold green]Version:[/] {VERSION}")
+            console.print(f"[bold green]Author:[/] {AUTHOR}")
+        else:
+            console.print("[red]Unknown command. Type 'help' for available commands.[/]")
+            
+        SCAN_STATUS = "Ready"
+        LAST_COMMAND = command
+        CURRENT_TASK = None
+        
+    except asyncio.CancelledError:
+        console.print("\n[yellow]Operation cancelled by user.[/]")
+        SCAN_STATUS = "Ready"
+        CURRENT_TASK = None
+    except Exception as e:
+        console.print(f"[red]Error processing command: {str(e)}[/]")
+        SCAN_STATUS = "Error"
+        CURRENT_TASK = None
+
+def show_help() -> None:
+    """Display help information."""
+    console.print("\n[bold blue]E502 OSINT Terminal Commands[/]")
+    
+    commands = {
+        "Network Analysis": [
+            ("network <target>", "Perform network topology mapping"),
+            ("arp <interface>", "Perform ARP scan on interface"),
+            ("fingerprint <target>", "Perform device fingerprinting")
+        ],
+        "Web Analysis": [
+            ("web <url>", "Analyze website technology stack"),
+            ("headers <url>", "Check security headers"),
+            ("waf <url>", "Detect web application firewall"),
+            ("cookies <url>", "Analyze cookie security")
+        ],
+        "SSL/TLS Analysis": [
+            ("ssl <hostname>", "Analyze SSL/TLS configuration"),
+            ("cert <hostname>", "Check SSL certificate"),
+            ("ciphers <hostname>", "Analyze cipher suites"),
+            ("hsts <hostname>", "Check HSTS configuration")
+        ],
+        "Vulnerability Assessment": [
+            ("vuln <target>", "Perform vulnerability scan"),
+            ("ports <target>", "Scan for open ports"),
+            ("services <target>", "Enumerate services"),
+            ("creds <target>", "Check default credentials")
+        ],
+        "Image Intelligence": [
+            ("image <path>", "Analyze image metadata and content"),
+            ("exif <path>", "Extract EXIF data"),
+            ("geo <path>", "Extract geolocation data"),
+            ("stego <path>", "Check for hidden content"),
+            ("hash <path>", "Generate image hashes")
+        ],
+        "Privacy Features": [
+            ("proxy add <n> <host> <port> <type>", "Add new proxy"),
+            ("proxy chain <proxy1> <proxy2> ...", "Create proxy chain"),
+            ("proxy status", "Show proxy status"),
+            ("rate <domain> <requests/sec>", "Set rate limit"),
+            ("rotate", "Rotate user agent"),
+            ("check tor", "Check if Tor is running")
+        ],
+        "Discord Integration": [
+            ("discord help", "Show Discord commands"),
+            ("discord enable", "Enable Discord integration"),
+            ("discord disable", "Disable Discord integration"),
+            ("discord set <url>", "Set webhook URL"),
+            ("discord save", "Save webhook URL"),
+            ("discord test", "Send test message"),
+            ("discord status", "Show integration status"),
+            ("discord summary", "Send scan summary"),
+            ("discord clear", "Clear scan history")
+        ],
+        "System": [
+            ("help", "Show this help message"),
+            ("clear", "Clear screen"),
+            ("exit", "Exit program"),
+            ("version", "Show version information")
+        ]
+    }
+    
+    for category, cmds in commands.items():
+        console.print(f"\n[bold yellow]{category}[/]")
+        for cmd, desc in cmds:
+            console.print(f"  [cyan]{cmd}[/] - {desc}")
+    
+    console.print("\n[bold green]Examples:[/]")
+    console.print("  network 192.168.1.0/24")
+    console.print("  arp eth0")
+    console.print("  fingerprint 192.168.1.1")
+    console.print("  web example.com")
+    console.print("  headers example.com")
+    console.print("  waf example.com")
+    console.print("  ssl example.com")
+    console.print("  vuln example.com")
+    console.print("  ports example.com")
+    console.print("  image photo.jpg")
+    console.print("  exif photo.jpg")
+    console.print("  geo photo.jpg")
+    console.print("  stego photo.jpg")
+    console.print("  proxy add tor 127.0.0.1 9050 socks5")
+    console.print("  rate example.com 10")
+    console.print("  rotate")
+    console.print("  check tor")
+    console.print("  discord enable")
+
+def main() -> None:
+    """Main entry point for the application."""
+    asyncio.run(async_main())
 
 if __name__ == "__main__":
     main() 

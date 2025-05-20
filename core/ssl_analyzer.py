@@ -1,294 +1,290 @@
 """
 SSL/TLS Analysis Module for E502 OSINT Terminal
-Provides comprehensive SSL/TLS certificate analysis including cipher suite analysis,
-certificate transparency checking, and security validation.
+Provides certificate analysis, cipher suite checking, and HSTS verification.
 """
 
 import ssl
 import socket
 import OpenSSL
 from OpenSSL import SSL
-from typing import Dict, List, Optional, Tuple
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from typing import Dict, List, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-import json
-from datetime import datetime
-import requests
+import datetime
+import asyncio
+import aiohttp
+from urllib.parse import urlparse
 import re
-import urllib3
-urllib3.disable_warnings()
 
 console = Console()
 
 class SSLAnalyzer:
     def __init__(self):
-        self.context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-        self.context.set_verify(SSL.VERIFY_NONE)
-        self.context.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_SSLv3)
+        self.ssl_context = ssl.create_default_context()
+        self.ssl_context.check_hostname = False
+        self.ssl_context.verify_mode = ssl.CERT_NONE
 
-    def analyze_ssl(self, hostname: str, port: int = 443) -> Dict:
+    async def analyze_ssl(self, hostname: str) -> Dict:
         """Perform comprehensive SSL/TLS analysis."""
         try:
-            analysis = {
-                'hostname': hostname,
-                'port': port,
-                'timestamp': datetime.now().isoformat(),
-                'certificate': self._get_certificate_info(hostname, port),
-                'cipher_suites': self._analyze_cipher_suites(hostname, port),
-                'protocol_versions': self._analyze_protocol_versions(hostname, port),
-                'hsts': self._check_hsts(hostname),
-                'certificate_transparency': self._check_certificate_transparency(hostname),
-                'security_issues': []
+            if not hostname.startswith(('http://', 'https://')):
+                hostname = f"https://{hostname}"
+
+            console.print(f"[bold green]Analyzing SSL/TLS for {hostname}...[/]")
+            
+            # Parse hostname
+            parsed = urlparse(hostname)
+            host = parsed.netloc or parsed.path
+            
+            # Get certificate
+            cert = await self._get_certificate(host)
+            if not cert:
+                return {}
+
+            # Analyze certificate
+            cert_analysis = self._analyze_certificate(cert)
+            
+            # Get cipher suites
+            cipher_suites = await self._get_cipher_suites(host)
+            
+            # Check HSTS
+            hsts_info = await self._check_hsts(hostname)
+            
+            return {
+                'certificate': cert_analysis,
+                'ciphers': cipher_suites,
+                'hsts': hsts_info
             }
 
-            # Check for common security issues
-            self._check_security_issues(analysis)
-            
-            return analysis
         except Exception as e:
             console.print(f"[red]Error during SSL analysis: {str(e)}[/]")
             return {}
 
-    def _get_certificate_info(self, hostname: str, port: int) -> Dict:
-        """Get detailed certificate information."""
+    async def _get_certificate(self, host: str) -> Optional[x509.Certificate]:
+        """Get SSL certificate for host."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
-            sock.connect((hostname, port))
+            # Create SSL context
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
             
-            ssl_sock = SSL.Connection(self.context, sock)
-            ssl_sock.set_connect_state()
-            ssl_sock.set_tlsext_host_name(hostname.encode())
-            ssl_sock.do_handshake()
+            # Try direct socket connection first
+            sock = socket.create_connection((host, 443), timeout=5)
+            with ssl_context.wrap_socket(sock, server_hostname=host) as ssl_sock:
+                cert_data = ssl_sock.getpeercert(binary_form=True)
+                return x509.load_der_x509_certificate(cert_data, default_backend())
+                
+        except Exception as e:
+            console.print(f"[red]Error getting certificate: {str(e)}[/]")
+            return None
+
+    def _analyze_certificate(self, cert: x509.Certificate) -> Dict:
+        """Analyze SSL certificate."""
+        try:
+            # Basic certificate info
+            subject = {}
+            for name in cert.subject:
+                subject[name.oid._name] = name.value
+                
+            issuer = {}
+            for name in cert.issuer:
+                issuer[name.oid._name] = name.value
             
-            cert = ssl_sock.get_peer_certificate()
+            # Validity period using UTC datetime
+            not_before = cert.not_valid_before_utc
+            not_after = cert.not_valid_after_utc
+            now = datetime.datetime.now(datetime.timezone.utc)
             
-            cert_info = {
-                'subject': dict(cert.get_subject().get_components()),
-                'issuer': dict(cert.get_issuer().get_components()),
-                'version': cert.get_version(),
-                'serial_number': cert.get_serial_number(),
-                'not_before': cert.get_notBefore().decode(),
-                'not_after': cert.get_notAfter().decode(),
-                'signature_algorithm': cert.get_signature_algorithm().decode(),
-                'extensions': []
+            # Check if certificate is expired
+            is_expired = now > not_after
+            is_not_yet_valid = now < not_before
+            
+            # Calculate days remaining
+            days_remaining = (not_after - now).days if not is_expired else 0
+            
+            # Get public key info
+            public_key = cert.public_key()
+            key_size = public_key.key_size if hasattr(public_key, 'key_size') else 'Unknown'
+            
+            # Get subject alternative names
+            try:
+                san = cert.extensions.get_extension_for_oid(x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                alt_names = san.value.get_values_for_type(x509.DNSName)
+            except:
+                alt_names = []
+            
+            return {
+                'subject': subject,
+                'issuer': issuer,
+                'validity': {
+                    'not_before': not_before.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    'not_after': not_after.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    'is_expired': is_expired,
+                    'is_not_yet_valid': is_not_yet_valid,
+                    'days_remaining': days_remaining
+                },
+                'public_key': {
+                    'type': type(public_key).__name__,
+                    'size': key_size
+                },
+                'alt_names': alt_names
             }
             
-            for i in range(cert.get_extension_count()):
-                ext = cert.get_extension(i)
-                cert_info['extensions'].append({
-                    'name': ext.get_short_name().decode(),
-                    'value': str(ext)
-                })
-            
-            ssl_sock.close()
-            sock.close()
-            
-            return cert_info
         except Exception as e:
-            console.print(f"[red]Error getting certificate info: {str(e)}[/]")
+            console.print(f"[red]Error analyzing certificate: {str(e)}[/]")
             return {}
 
-    def _analyze_cipher_suites(self, hostname: str, port: int) -> Dict:
-        """Analyze supported cipher suites."""
+    async def _get_cipher_suites(self, host: str) -> List[Dict]:
+        """Get supported cipher suites."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
-            sock.connect((hostname, port))
+            # Create SSL context
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
             
-            ssl_sock = SSL.Connection(self.context, sock)
-            ssl_sock.set_connect_state()
-            ssl_sock.set_tlsext_host_name(hostname.encode())
+            # Create socket connection
+            sock = socket.create_connection((host, 443), timeout=5)
+            with ssl_context.wrap_socket(sock, server_hostname=host) as ssl_sock:
+                cipher = ssl_sock.cipher()
+                return [{
+                    'name': cipher[0],
+                    'version': cipher[1],
+                    'bits': cipher[2]
+                }]
             
-            # Get all supported cipher suites
-            ciphers = ssl_sock.get_cipher_list()
-            
-            analysis = {
-                'total_ciphers': len(ciphers),
-                'ciphers': [],
-                'weak_ciphers': [],
-                'recommended_ciphers': []
-            }
-            
-            for cipher in ciphers:
-                cipher_info = {
-                    'name': cipher.decode(),
-                    'strength': self._get_cipher_strength(cipher.decode())
-                }
-                analysis['ciphers'].append(cipher_info)
-                
-                if cipher_info['strength'] == 'weak':
-                    analysis['weak_ciphers'].append(cipher_info)
-                elif cipher_info['strength'] == 'strong':
-                    analysis['recommended_ciphers'].append(cipher_info)
-            
-            ssl_sock.close()
-            sock.close()
-            
-            return analysis
         except Exception as e:
-            console.print(f"[red]Error analyzing cipher suites: {str(e)}[/]")
-            return {}
+            console.print(f"[red]Error getting cipher suites: {str(e)}[/]")
+            return []
 
-    def _analyze_protocol_versions(self, hostname: str, port: int) -> Dict:
-        """Analyze supported SSL/TLS protocol versions."""
-        versions = {
-            'SSLv2': False,
-            'SSLv3': False,
-            'TLSv1.0': False,
-            'TLSv1.1': False,
-            'TLSv1.2': False,
-            'TLSv1.3': False
-        }
-        
-        try:
-            for version in versions.keys():
-                context = SSL.Context(SSL.TLS_CLIENT_METHOD)
-                if version == 'SSLv2':
-                    context.set_options(SSL.OP_NO_SSLv3 | SSL.OP_NO_TLSv1 | SSL.OP_NO_TLSv1_1 | SSL.OP_NO_TLSv1_2)
-                elif version == 'SSLv3':
-                    context.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_TLSv1 | SSL.OP_NO_TLSv1_1 | SSL.OP_NO_TLSv1_2)
-                elif version == 'TLSv1.0':
-                    context.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_SSLv3 | SSL.OP_NO_TLSv1_1 | SSL.OP_NO_TLSv1_2)
-                elif version == 'TLSv1.1':
-                    context.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_SSLv3 | SSL.OP_NO_TLSv1 | SSL.OP_NO_TLSv1_2)
-                elif version == 'TLSv1.2':
-                    context.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_SSLv3 | SSL.OP_NO_TLSv1 | SSL.OP_NO_TLSv1_1)
-                
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(5)
-                    sock.connect((hostname, port))
-                    
-                    ssl_sock = SSL.Connection(context, sock)
-                    ssl_sock.set_connect_state()
-                    ssl_sock.set_tlsext_host_name(hostname.encode())
-                    ssl_sock.do_handshake()
-                    
-                    versions[version] = True
-                    ssl_sock.close()
-                except:
-                    pass
-                finally:
-                    sock.close()
-            
-            return versions
-        except Exception as e:
-            console.print(f"[red]Error analyzing protocol versions: {str(e)}[/]")
-            return {}
-
-    def _check_hsts(self, hostname: str) -> Dict:
+    async def _check_hsts(self, url: str) -> Dict:
         """Check HSTS configuration."""
         try:
-            response = requests.get(f'https://{hostname}', verify=False, timeout=10)
-            hsts_header = response.headers.get('Strict-Transport-Security', '')
-            
-            analysis = {
-                'present': bool(hsts_header),
-                'header_value': hsts_header,
-                'max_age': None,
-                'include_subdomains': False,
-                'preload': False
-            }
-            
-            if hsts_header:
-                if 'max-age=' in hsts_header:
-                    analysis['max_age'] = int(re.search(r'max-age=(\d+)', hsts_header).group(1))
-                analysis['include_subdomains'] = 'includeSubDomains' in hsts_header
-                analysis['preload'] = 'preload' in hsts_header
-            
-            return analysis
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    hsts_header = response.headers.get('Strict-Transport-Security', '')
+                    
+                    if hsts_header:
+                        # Parse HSTS header
+                        max_age = re.search(r'max-age=(\d+)', hsts_header)
+                        includes_subdomains = 'includeSubDomains' in hsts_header
+                        preload = 'preload' in hsts_header
+                        
+                        return {
+                            'enabled': True,
+                            'max_age': int(max_age.group(1)) if max_age else 0,
+                            'includes_subdomains': includes_subdomains,
+                            'preload': preload
+                        }
+                    
+                    return {
+                        'enabled': False,
+                        'max_age': 0,
+                        'includes_subdomains': False,
+                        'preload': False
+                    }
+                    
         except Exception as e:
             console.print(f"[red]Error checking HSTS: {str(e)}[/]")
-            return {}
-
-    def _check_certificate_transparency(self, hostname: str) -> Dict:
-        """Check Certificate Transparency logs."""
-        try:
-            response = requests.get(f'https://{hostname}', verify=False, timeout=10)
-            sct_header = response.headers.get('X-Signed-Certificate-Timestamp', '')
-            
-            analysis = {
-                'present': bool(sct_header),
-                'header_value': sct_header,
-                'logs': []
+            return {
+                'enabled': False,
+                'max_age': 0,
+                'includes_subdomains': False,
+                'preload': False
             }
+
+    def display_ssl_analysis(self, results: Dict) -> None:
+        """Display SSL analysis results."""
+        if not results:
+            console.print("[red]No SSL analysis results available.[/]")
+            return
+
+        # Certificate Information
+        cert_table = Table(title="Certificate Information", show_header=True, header_style="bold magenta")
+        cert_table.add_column("Field", style="cyan", width=20)
+        cert_table.add_column("Value", style="green", width=60)
+
+        if 'certificate' in results:
+            cert = results['certificate']
             
-            if sct_header:
-                # Parse SCT header
-                scts = sct_header.split(',')
-                for sct in scts:
-                    analysis['logs'].append({
-                        'version': sct[:2],
-                        'log_id': sct[2:66],
-                        'timestamp': int(sct[66:78], 16),
-                        'signature': sct[78:]
-                    })
+            # Subject
+            subject = cert.get('subject', {})
+            cert_table.add_row("Subject", "\n".join(f"{k}: {v}" for k, v in subject.items()))
             
-            return analysis
-        except Exception as e:
-            console.print(f"[red]Error checking certificate transparency: {str(e)}[/]")
-            return {}
+            # Issuer
+            issuer = cert.get('issuer', {})
+            cert_table.add_row("Issuer", "\n".join(f"{k}: {v}" for k, v in issuer.items()))
+            
+            # Validity
+            validity = cert.get('validity', {})
+            cert_table.add_row("Valid From", validity.get('not_before', 'Unknown'))
+            cert_table.add_row("Valid Until", validity.get('not_after', 'Unknown'))
+            
+            # Status
+            if validity.get('is_expired'):
+                status = "[red]EXPIRED[/]"
+            elif validity.get('is_not_yet_valid'):
+                status = "[yellow]NOT YET VALID[/]"
+            else:
+                days = validity.get('days_remaining', 0)
+                if days < 30:
+                    status = f"[yellow]EXPIRING SOON ({days} days)[/]"
+                else:
+                    status = f"[green]VALID ({days} days)[/]"
+            cert_table.add_row("Status", status)
+            
+            # Public Key
+            public_key = cert.get('public_key', {})
+            cert_table.add_row(
+                "Public Key",
+                f"{public_key.get('type', 'Unknown')} ({public_key.get('size', 'Unknown')} bits)"
+            )
+            
+            # Subject Alternative Names
+            alt_names = cert.get('alt_names', [])
+            if alt_names:
+                cert_table.add_row("Alternative Names", "\n".join(alt_names))
 
-    def _get_cipher_strength(self, cipher: str) -> str:
-        """Determine the strength of a cipher suite."""
-        weak_patterns = [
-            r'NULL', r'aNULL', r'EXPORT', r'LOW', r'DES', r'RC4', r'MD5',
-            r'PSK', r'SRP', r'KRB5', r'CBC'
-        ]
-        
-        strong_patterns = [
-            r'AES256', r'CHACHA20', r'ECDHE', r'DHE', r'GCM', r'POLY1305'
-        ]
-        
-        for pattern in weak_patterns:
-            if re.search(pattern, cipher, re.I):
-                return 'weak'
-        
-        for pattern in strong_patterns:
-            if re.search(pattern, cipher, re.I):
-                return 'strong'
-        
-        return 'medium'
+        console.print(cert_table)
 
-    def _check_security_issues(self, analysis: Dict) -> None:
-        """Check for common security issues."""
-        issues = []
-        
-        # Check certificate expiration
-        if 'certificate' in analysis and 'not_after' in analysis['certificate']:
-            not_after = datetime.strptime(analysis['certificate']['not_after'], '%Y%m%d%H%M%SZ')
-            if (not_after - datetime.now()).days < 30:
-                issues.append('Certificate expires in less than 30 days')
-        
-        # Check for weak protocols
-        if analysis.get('protocol_versions', {}).get('SSLv2', False):
-            issues.append('SSLv2 is enabled (insecure)')
-        if analysis.get('protocol_versions', {}).get('SSLv3', False):
-            issues.append('SSLv3 is enabled (insecure)')
-        if analysis.get('protocol_versions', {}).get('TLSv1.0', False):
-            issues.append('TLSv1.0 is enabled (deprecated)')
-        
-        # Check for weak ciphers
-        if analysis.get('cipher_suites', {}).get('weak_ciphers'):
-            issues.append(f"Found {len(analysis['cipher_suites']['weak_ciphers'])} weak cipher suites")
-        
-        # Check HSTS
-        if not analysis.get('hsts', {}).get('present'):
-            issues.append('HSTS is not enabled')
-        
-        analysis['security_issues'] = issues
+        # Cipher Suites
+        if 'ciphers' in results and results['ciphers']:
+            cipher_table = Table(title="Cipher Suites", show_header=True, header_style="bold magenta")
+            cipher_table.add_column("Cipher", style="cyan", width=30)
+            cipher_table.add_column("Version", style="green", width=15)
+            cipher_table.add_column("Bits", style="yellow", width=10)
 
-    def display_ssl_analysis(self, analysis: Dict) -> None:
-        """Display SSL analysis results in a formatted table."""
-        table = Table(title="SSL/TLS Analysis Results")
-        table.add_column("Property", style="cyan")
-        table.add_column("Value", style="green")
-        
-        for key, value in analysis.items():
-            if isinstance(value, (dict, list)):
-                value = json.dumps(value, indent=2)
-            table.add_row(str(key), str(value))
-        
-        console.print(table) 
+            for cipher in results['ciphers']:
+                cipher_table.add_row(
+                    cipher.get('name', 'Unknown'),
+                    cipher.get('version', 'Unknown'),
+                    str(cipher.get('bits', 'Unknown'))
+                )
+
+            console.print(cipher_table)
+
+        # HSTS Information
+        if 'hsts' in results:
+            hsts = results['hsts']
+            hsts_table = Table(title="HSTS Configuration", show_header=True, header_style="bold magenta")
+            hsts_table.add_column("Setting", style="cyan", width=20)
+            hsts_table.add_column("Value", style="green", width=40)
+
+            hsts_table.add_row(
+                "HSTS Enabled",
+                "[green]Yes[/]" if hsts.get('enabled') else "[red]No[/]"
+            )
+            if hsts.get('enabled'):
+                hsts_table.add_row("Max Age", str(hsts.get('max_age', 0)))
+                hsts_table.add_row(
+                    "Include Subdomains",
+                    "[green]Yes[/]" if hsts.get('includes_subdomains') else "[red]No[/]"
+                )
+                hsts_table.add_row(
+                    "Preload",
+                    "[green]Yes[/]" if hsts.get('preload') else "[red]No[/]"
+                )
+
+            console.print(hsts_table) 

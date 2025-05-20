@@ -1,26 +1,54 @@
-rich
-art2text
-requests[socks]
-dnspython
-python-whois
-beautifulsoup4
-PySocks
-cryptography
-scapy
-python-nmap
-netifaces
-python-wappalyzer
-sslyze
-certifi
-urllib3
-aiohttp
-asyncio
-python-dotenv
-fake-useragent
-Pillow
-piexif
-opencv-python
-numpy
-geopy
-stegano
-imagehash 
+# Core dependencies
+aiohttp>=3.8.0
+requests>=2.26.0
+rich>=10.0.0
+python-wappalyzer>=0.3.0
+dnspython>=2.0.0
+fake-useragent>=0.1.11
+
+# Network scanning
+scapy>=2.4.5
+python-nmap>=0.7.1
+paramiko>=2.7.2
+
+# SSL/TLS analysis
+cryptography>=3.4.7
+pyOpenSSL>=20.0.1
+
+# Image analysis
+Pillow>=8.3.1
+exifread>=3.0.0
+piexif>=1.1.3
+imagehash>=4.2.1
+folium>=0.12.1
+
+# Web security
+beautifulsoup4>=4.9.3
+lxml>=4.9.0
+urllib3>=1.26.6
+
+# Privacy features
+socks>=1.7.1
+pysocks>=1.7.1
+stem>=1.8.0
+
+# DNS and Network Analysis
+dnspython>=2.3.0
+python-whois>=0.7.3
+shodan>=1.28.0
+censys>=2.1.9
+virustotal-python>=0.1.3
+securitytrails>=0.1.0
+h8mail>=2.0.0
+theHarvester>=4.0.3
+amass>=3.19.2
+subfinder>=2.5.5
+httpx>=0.24.1
+aiofiles>=23.1.0
+aiodns>=3.0.0
+cryptography>=41.0.0
+pycares>=4.3.0
+
+# Utilities
+python-dateutil>=2.8.2
+tqdm>=4.62.2 
