@@ -531,7 +531,7 @@ class VulnerabilityScanner:
             return False
 
     async def _enumerate_dns(self, domain: str) -> Dict:
-        """Perform comprehensive DNS enumeration with bypass techniques and more record types, including historical DNS (no API keys)."""
+        """Perform comprehensive DNS enumeration with bypass techniques."""
         try:
             dns_info = {
                 'records': {},
@@ -545,32 +545,391 @@ class VulnerabilityScanner:
                 'historical_records': [],
                 'dns_servers': [],
                 'reverse_dns': [],
-                'certificate_transparency': []
+                'certificate_transparency': [],
+                'dnssec': {},
+                'dns_servers_info': [],
+                'dns_zone_info': {},
+                'dns_blacklist': [],
+                'dns_health': {},
+                'dns_metrics': {},
+                'dns_geolocation': [],
+                'dns_historical': [],
+                'dns_related': [],
+                'dns_technologies': [],
+                'dns_ownership': {},
+                'dns_ssl_certs': [],
+                'dns_headers': {},
+                'dns_redirects': [],
+                'dns_cookies': [],
+                'dns_robots': None,
+                'dns_sitemap': None,
+                'dns_web_technologies': [],
+                'dns_web_headers': {},
+                'dns_web_meta': {},
+                'dns_web_links': [],
+                'dns_web_forms': [],
+                'dns_web_scripts': [],
+                'dns_web_cookies': [],
+                'dns_web_robots': None,
+                'dns_web_sitemap': None
             }
-            # More record types
-            record_types = [
-                'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'PTR', 'NS', 'SOA', 'CAA', 'DS', 'DNSKEY', 'NSEC', 'NSEC3', 'RRSIG', 'TLSA', 'SSHFP',
-                'IPSECKEY', 'CERT', 'DNAME', 'LOC', 'NAPTR', 'RP', 'AFSDB', 'HINFO', 'MINFO', 'MR', 'RT', 'WKS', 'X25', 'ISDN', 'NSAP', 'NSAP-PTR',
-                'APL', 'ATMA', 'AXFR', 'IXFR', 'MAILA', 'MAILB', 'MB', 'MG', 'MINFOR', 'MR', 'NULL', 'PX', 'SIG', 'SPF', 'UID', 'UINFO', 'UNSPEC', 'X25'
-            ]
+            
+            # Try multiple DNS resolvers with rotation
             resolvers = [
-                '8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1', '9.9.9.9', '149.112.112.112', '208.67.222.222', '208.67.220.220'
+                '8.8.8.8', '8.8.4.4',  # Google
+                '1.1.1.1', '1.0.0.1',  # Cloudflare
+                '9.9.9.9', '149.112.112.112',  # Quad9
+                '208.67.222.222', '208.67.220.220',  # OpenDNS
+                '64.6.64.6', '64.6.65.6',  # Verisign
+                '77.88.8.8', '77.88.8.1',  # Yandex
+                '84.200.69.80', '84.200.70.40',  # DNS.WATCH
+                '8.26.56.26', '8.20.247.20',  # Comodo
+                '195.46.39.39', '195.46.39.40',  # SafeDNS
+                '216.146.35.35', '216.146.36.36'  # Dyn
             ]
+            
+            # Rotate through resolvers to avoid rate limiting
             for resolver in resolvers:
                 try:
                     dns_resolver = dns.resolver.Resolver()
                     dns_resolver.nameservers = [resolver]
+                    dns_resolver.timeout = 2
+                    dns_resolver.lifetime = 4
+                    
+                    # Get nameservers with detailed info
+                    try:
+                        ns_records = dns_resolver.resolve(domain, 'NS')
+                        for ns in ns_records:
+                            ns_info = {
+                                'name': str(ns),
+                                'ip': None,
+                                'location': None,
+                                'asn': None,
+                                'organization': None
+                            }
+                            try:
+                                ns_ip = dns_resolver.resolve(str(ns), 'A')[0]
+                                ns_info['ip'] = str(ns_ip)
+                                # Get ASN and location info
+                                try:
+                                    async with aiohttp.ClientSession() as session:
+                                        async with session.get(f'https://ipapi.co/{ns_ip}/json/') as response:
+                                            if response.status == 200:
+                                                data = await response.json()
+                                                ns_info['location'] = f"{data.get('city', '')}, {data.get('country_name', '')}"
+                                                ns_info['asn'] = data.get('asn', '')
+                                                ns_info['organization'] = data.get('org', '')
+                                except:
+                                    pass
+                            except:
+                                pass
+                            dns_info['nameservers'].append(ns_info)
+                    except:
+                        pass
+                    
+                    # Try zone transfer with each nameserver
+                    for ns in dns_info['nameservers']:
+                        try:
+                            zone = dns.zone.from_xfr(dns.query.xfr(ns['ip'], domain))
+                            dns_info['zone_transfer'] = True
+                            zone_info = {
+                                'nameserver': ns['name'],
+                                'records': {}
+                            }
+                            for name, node in zone.nodes.items():
+                                for rdataset in node.rdatasets:
+                                    if str(name) not in zone_info['records']:
+                                        zone_info['records'][str(name)] = []
+                                    zone_info['records'][str(name)].append(str(rdataset))
+                            dns_info['dns_zone_info'][ns['name']] = zone_info
+                        except:
+                            continue
+                    
+                    # Enhanced record types to check (including new ones)
+                    record_types = [
+                        'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'PTR', 'NS', 'SOA',
+                        'CAA', 'DS', 'DNSKEY', 'NSEC', 'NSEC3', 'RRSIG', 'TLSA', 'SSHFP',
+                        'IPSECKEY', 'CERT', 'DNAME', 'LOC', 'NAPTR', 'RP', 'AFSDB', 'HINFO',
+                        'MINFO', 'MR', 'RT', 'WKS', 'X25', 'ISDN', 'NSAP', 'NSAP-PTR',
+                        'APL', 'ATMA', 'AXFR', 'IXFR', 'MAILA', 'MAILB', 'MB', 'MG', 'MINFOR',
+                        'MR', 'NULL', 'PX', 'SIG', 'SPF', 'UID', 'UINFO', 'UNSPEC', 'X25'
+                    ]
+                    
                     for record_type in record_types:
                         try:
                             records = dns_resolver.resolve(domain, record_type)
                             if record_type not in dns_info['records']:
                                 dns_info['records'][record_type] = []
                             dns_info['records'][record_type].extend([str(r) for r in records])
+                            
+                            # Store mail servers with additional info
+                            if record_type == 'MX':
+                                for record in records:
+                                    mx_info = {
+                                        'exchange': str(record.exchange),
+                                        'preference': record.preference,
+                                        'ip': None,
+                                        'location': None,
+                                        'asn': None,
+                                        'organization': None
+                                    }
+                                    try:
+                                        mx_ip = dns_resolver.resolve(str(record.exchange), 'A')[0]
+                                        mx_info['ip'] = str(mx_ip)
+                                        # Get ASN and location info
+                                        try:
+                                            async with aiohttp.ClientSession() as session:
+                                                async with session.get(f'https://ipapi.co/{mx_ip}/json/') as response:
+                                                    if response.status == 200:
+                                                        data = await response.json()
+                                                        mx_info['location'] = f"{data.get('city', '')}, {data.get('country_name', '')}"
+                                                        mx_info['asn'] = data.get('asn', '')
+                                                        mx_info['organization'] = data.get('org', '')
+                                        except:
+                                            pass
+                                    except:
+                                        pass
+                                    dns_info['mail_servers'].append(mx_info)
+                            
+                            # Store SPF record with analysis
+                            if record_type == 'TXT':
+                                for record in records:
+                                    if 'v=spf1' in str(record):
+                                        spf_info = {
+                                            'record': str(record),
+                                            'mechanisms': [],
+                                            'modifiers': [],
+                                            'includes': [],
+                                            'redirects': [],
+                                            'all': None
+                                        }
+                                        # Parse SPF record
+                                        spf_parts = str(record).split()
+                                        for part in spf_parts:
+                                            if part.startswith('include:'):
+                                                spf_info['includes'].append(part[8:])
+                                            elif part.startswith('redirect='):
+                                                spf_info['redirects'].append(part[9:])
+                                            elif part.startswith('all'):
+                                                spf_info['all'] = part
+                                            elif part in ['ip4:', 'ip6:', 'a:', 'mx:', 'ptr:', 'exists:', 'exp:']:
+                                                spf_info['mechanisms'].append(part)
+                                            else:
+                                                spf_info['modifiers'].append(part)
+                                        dns_info['spf_record'] = spf_info
+                            
                         except:
                             continue
+                    
+                    # Try DNS wildcard detection with analysis
+                    try:
+                        wildcard = f"*.{domain}"
+                        dns_resolver.resolve(wildcard, 'A')
+                        wildcard_info = {
+                            'detected': True,
+                            'type': 'A',
+                            'impact': 'May affect subdomain enumeration accuracy',
+                            'recommendation': 'Use additional enumeration techniques'
+                        }
+                        dns_info['records']['WILDCARD'] = wildcard_info
+                    except:
+                        pass
+                    
+                    # Try DNS cache snooping with analysis
+                    try:
+                        dns_resolver.cache = dns.resolver.Cache()
+                        dns_resolver.resolve(domain, 'A')
+                        cache_info = {
+                            'detected': True,
+                            'type': 'A',
+                            'impact': 'May reveal cached DNS records',
+                            'recommendation': 'Use multiple resolvers for verification'
+                        }
+                        dns_info['records']['CACHE'] = cache_info
+                    except:
+                        pass
+                    
                 except:
                     continue
-            # Historical DNS using SecurityTrails public endpoint (no API key required for basic info)
+            
+            # Check for DMARC record with analysis
+            try:
+                dmarc_domain = f'_dmarc.{domain}'
+                dmarc_records = dns.resolver.resolve(dmarc_domain, 'TXT')
+                dmarc_info = {
+                    'record': str(dmarc_records[0]),
+                    'version': None,
+                    'policy': None,
+                    'subdomain_policy': None,
+                    'percentage': None,
+                    'report_uri': None,
+                    'rua': None,
+                    'ruf': None,
+                    'aspf': None,
+                    'adkim': None
+                }
+                # Parse DMARC record
+                dmarc_parts = str(dmarc_records[0]).split(';')
+                for part in dmarc_parts:
+                    if 'v=' in part:
+                        dmarc_info['version'] = part.split('=')[1]
+                    elif 'p=' in part:
+                        dmarc_info['policy'] = part.split('=')[1]
+                    elif 'sp=' in part:
+                        dmarc_info['subdomain_policy'] = part.split('=')[1]
+                    elif 'pct=' in part:
+                        dmarc_info['percentage'] = part.split('=')[1]
+                    elif 'rua=' in part:
+                        dmarc_info['rua'] = part.split('=')[1]
+                    elif 'ruf=' in part:
+                        dmarc_info['ruf'] = part.split('=')[1]
+                    elif 'aspf=' in part:
+                        dmarc_info['aspf'] = part.split('=')[1]
+                    elif 'adkim=' in part:
+                        dmarc_info['adkim'] = part.split('=')[1]
+                dns_info['dmarc_record'] = dmarc_info
+            except:
+                pass
+            
+            # Try DNS over HTTPS with multiple providers
+            doh_providers = [
+                'https://dns.google/resolve',
+                'https://cloudflare-dns.com/dns-query',
+                'https://dns.alidns.com/dns-query',
+                'https://doh.opendns.com/dns-query',
+                'https://doh.cleanbrowsing.org/dns-query',
+                'https://doh.securedns.eu/dns-query',
+                'https://doh.centraleu.pi-dns.com/dns-query',
+                'https://doh.dns.sb/dns-query',
+                'https://doh.powerdns.org/dns-query',
+                'https://doh.ffmuc.net/dns-query'
+            ]
+            
+            for provider in doh_providers:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f'{provider}?name={domain}&type=A',
+                                             headers={'accept': 'application/dns-json'}) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                if 'Answer' in data:
+                                    provider_name = provider.split('//')[1].split('/')[0]
+                                    dns_info['records'][f'DOH_{provider_name}'] = [str(r['data']) for r in data['Answer']]
+                except:
+                    continue
+            
+            # Try DNS over TLS with multiple providers
+            dot_providers = [
+                ('1.1.1.1', 'cloudflare-dns.com'),
+                ('8.8.8.8', 'dns.google'),
+                ('9.9.9.9', 'dns.quad9.net'),
+                ('208.67.222.222', 'dns.opendns.com'),
+                ('64.6.64.6', 'dns.verisign.com'),
+                ('77.88.8.8', 'dns.yandex.com'),
+                ('84.200.69.80', 'dns.watch'),
+                ('8.26.56.26', 'dns.comodo.com'),
+                ('195.46.39.39', 'dns.safedns.com'),
+                ('216.146.35.35', 'dns.dyn.com')
+            ]
+            
+            for ip, hostname in dot_providers:
+                try:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    
+                    sock = socket.create_connection((ip, 853))
+                    with context.wrap_socket(sock, server_hostname=hostname) as ssl_sock:
+                        # Send DNS query over TLS
+                        query = dns.message.make_query(domain, dns.rdatatype.A)
+                        ssl_sock.send(query.to_wire())
+                        response = dns.message.from_wire(ssl_sock.recv(1024))
+                        if response.answer:
+                            dns_info['records'][f'DOT_{hostname}'] = [str(r) for r in response.answer]
+                except:
+                    continue
+            
+            # Enhanced subdomain enumeration
+            subdomains = await self._enumerate_subdomains(domain)
+            dns_info['subdomains'] = subdomains
+            
+            # Try reverse DNS lookup for IP ranges with geolocation
+            try:
+                for record in dns_info['records'].get('A', []):
+                    try:
+                        reverse = dns.reversename.from_address(record)
+                        ptr_records = dns.resolver.resolve(reverse, 'PTR')
+                        for ptr in ptr_records:
+                            ptr_info = {
+                                'ip': record,
+                                'hostname': str(ptr),
+                                'location': None,
+                                'asn': None,
+                                'organization': None
+                            }
+                            # Get geolocation and ASN info
+                            try:
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.get(f'https://ipapi.co/{record}/json/') as response:
+                                        if response.status == 200:
+                                            data = await response.json()
+                                            ptr_info['location'] = f"{data.get('city', '')}, {data.get('country_name', '')}"
+                                            ptr_info['asn'] = data.get('asn', '')
+                                            ptr_info['organization'] = data.get('org', '')
+                            except:
+                                pass
+                            dns_info['reverse_dns'].append(ptr_info)
+                    except:
+                        continue
+            except:
+                pass
+            
+            # Try certificate transparency logs with enhanced info
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f'https://crt.sh/?q={domain}&output=json') as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            for cert in data:
+                                if 'name_value' in cert:
+                                    cert_info = {
+                                        'domain': cert['name_value'],
+                                        'issuer': cert.get('issuer_name', ''),
+                                        'valid_from': cert.get('not_before', ''),
+                                        'valid_to': cert.get('not_after', ''),
+                                        'serial': cert.get('serial_number', ''),
+                                        'sha1': cert.get('sha1', ''),
+                                        'sha256': cert.get('sha256', '')
+                                    }
+                                    dns_info['certificate_transparency'].append(cert_info)
+            except:
+                pass
+            
+            # Get WHOIS information
+            try:
+                import whois
+                whois_info = whois.whois(domain)
+                dns_info['whois_info'] = {
+                    'registrar': whois_info.registrar,
+                    'creation_date': str(whois_info.creation_date),
+                    'expiration_date': str(whois_info.expiration_date),
+                    'updated_date': str(whois_info.updated_date),
+                    'name_servers': whois_info.name_servers,
+                    'status': whois_info.status,
+                    'emails': whois_info.emails,
+                    'dnssec': whois_info.dnssec,
+                    'name': whois_info.name,
+                    'org': whois_info.org,
+                    'address': whois_info.address,
+                    'city': whois_info.city,
+                    'state': whois_info.state,
+                    'zipcode': whois_info.zipcode,
+                    'country': whois_info.country
+                }
+            except:
+                pass
+
+            # Add historical DNS lookup (no API key required)
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(f'https://api.securitytrails.com/v1/domain/{domain}/history/dns/a') as response:
@@ -581,18 +940,9 @@ class VulnerabilityScanner:
                                     dns_info['historical_records'].append(str(rec))
             except:
                 pass
-            # Certificate transparency logs
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f'https://crt.sh/?q={domain}&output=json') as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            for cert in data:
-                                if 'name_value' in cert:
-                                    dns_info['certificate_transparency'].append(cert['name_value'])
-            except:
-                pass
+            
             return dns_info
+            
         except Exception as e:
             console.print(f"[red]Error during DNS enumeration: {str(e)}[/]")
             return {}
