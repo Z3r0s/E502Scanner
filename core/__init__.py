@@ -1,19 +1,49 @@
 """
-E502Scanner Core Package
------------------------
-This package contains the core functionality modules for the E502 OSINT Terminal.
+Core Package for E502 OSINT Terminal
+
+This package provides core functionality for the E502 OSINT Terminal,
+including privacy management, image intelligence, and comprehensive scanning capabilities.
 """
 
-from .network_analysis import NetworkAnalyzer
-from .web_recon import WebAnalyzer
-from .ssl_analyzer import SSLAnalyzer
 from .privacy_manager import PrivacyManager
-from .vulnerability_scanner import VulnerabilityScanner
+from .image_intel import ImageIntelligence
+from .notification_manager import NotificationManager
+from .report_manager import ReportManager
+from .config_manager import ConfigManager
+from .web_security import WebSecurity
+
+# Import scan package
+from .scan import (
+    ScanEngine, ScanController, ScanAnalyzer, ScanReporter,
+    ScanExporter, ScanImporter, ScanValidator, ScanMonitor,
+    ScanLogger, ScanConfigurator, ScanManager, ScanConfig,
+    VulnerabilityScanner, WebScanner, SSLAnalyzer, NetworkAnalyzer
+)
 
 __all__ = [
-    'NetworkAnalyzer',
-    'WebAnalyzer',
-    'SSLAnalyzer',
+    # Core components
     'PrivacyManager',
-    'VulnerabilityScanner'
+    'ImageIntelligence',
+    'NotificationManager',
+    'ReportManager',
+    'ConfigManager',
+    'WebSecurity',
+    
+    # Scan components
+    'ScanEngine',
+    'ScanController',
+    'ScanAnalyzer',
+    'ScanReporter',
+    'ScanExporter',
+    'ScanImporter',
+    'ScanValidator',
+    'ScanMonitor',
+    'ScanLogger',
+    'ScanConfigurator',
+    'ScanManager',
+    'ScanConfig',
+    'VulnerabilityScanner',
+    'WebScanner',
+    'SSLAnalyzer',
+    'NetworkAnalyzer'
 ] 

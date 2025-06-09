@@ -1,321 +1,535 @@
 """
-Privacy Management Module for E502 OSINT Terminal
-Provides advanced privacy features including multiple proxy support,
-proxy chain configuration, user agent rotation, and request rate limiting.
+Privacy Manager Module for E502 OSINT Terminal
+Provides comprehensive privacy and anonymity features.
 """
 
 import requests
 import random
+import json
+import logging
 import time
+import socket
+import ssl
+import urllib3
+import aiohttp
+import asyncio
 from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+import os
+import sys
+import platform
+import hashlib
+import base64
+import urllib.parse
+from functools import wraps
+import signal
+from contextlib import contextmanager
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
-import json
-from datetime import datetime
-import socks
-import socket
-from fake_useragent import UserAgent
-import threading
-from queue import Queue
-import asyncio
-import aiohttp
-from urllib.parse import urlparse
-import os
+from rich.progress import Progress
 
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+logger = logging.getLogger("E502OSINT.PrivacyManager")
 console = Console()
+
+def timeout_handler(signum, frame):
+    raise TimeoutError("Operation timed out")
+
+@contextmanager
+def timeout(seconds):
+    """Context manager for timeout handling."""
+    if platform.system() != 'Windows':
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        if platform.system() != 'Windows':
+            signal.alarm(0)
+
+def handle_timeout(func):
+    """Decorator for handling timeouts."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        timeout_seconds = kwargs.pop('timeout', 30)
+        try:
+            with timeout(timeout_seconds):
+                return func(*args, **kwargs)
+        except TimeoutError:
+            logger.error(f"Operation timed out after {timeout_seconds} seconds")
+            return None
+        except Exception as e:
+            logger.error(f"Error in {func.__name__}: {str(e)}")
+            return None
+    return wrapper
 
 class PrivacyManager:
     def __init__(self):
-        self.user_agent = UserAgent()
-        self.current_user_agent = self.user_agent.random
-        self.proxies = {}
-        self.proxy_chains = []
-        self.rate_limits = {}
-        self.last_request_time = {}
-        self.config_file = "privacy_config.json"
-        self.load_config()
-        self.request_history = {}
-        self.lock = threading.Lock()
         self.session = requests.Session()
-        self._setup_default_session()
+        self.session.verify = False
+        self.proxies = []
+        self.current_proxy = None
+        self.user_agents = []
+        self.current_user_agent = None
+        self.timeout = 30
+        self.retry_count = 3
+        self.retry_delay = 1
+        self.proxy_chain = []
+        self.proxy_rotation_interval = 300  # 5 minutes
+        self.last_proxy_rotation = 0
+        self.user_agent_rotation_interval = 60  # 1 minute
+        self.last_user_agent_rotation = 0
+        self._load_user_agents()
+        self._load_proxies()
 
-    def load_config(self) -> None:
-        """Load privacy configuration from file."""
+    def _load_user_agents(self) -> None:
+        """Load user agents from file or default list."""
         try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    config = json.load(f)
-                    self.proxies = config.get('proxies', {})
-                    self.proxy_chains = config.get('proxy_chains', [])
-                    self.rate_limits = config.get('rate_limits', {})
-        except Exception as e:
-            console.print(f"[red]Error loading privacy configuration: {str(e)}[/]")
-
-    def save_config(self) -> None:
-        """Save privacy configuration to file."""
-        try:
-            config = {
-                'proxies': self.proxies,
-                'proxy_chains': self.proxy_chains,
-                'rate_limits': self.rate_limits
-            }
-            with open(self.config_file, 'w') as f:
-                json.dump(config, f, indent=4)
-        except Exception as e:
-            console.print(f"[red]Error saving privacy configuration: {str(e)}[/]")
-
-    def _setup_default_session(self) -> None:
-        """Setup default session with privacy features."""
-        self.session.headers.update({
-            'User-Agent': self.current_user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        })
-
-    def rotate_user_agent(self) -> None:
-        """Rotate to a new random user agent."""
-        self.current_user_agent = self.user_agent.random
-        console.print(f"[green]New User-Agent:[/] {self.current_user_agent}")
-        with self.lock:
-            self.session.headers.update({
-                'User-Agent': self.current_user_agent
-            })
-
-    def add_proxy(self, name: str, host: str, port: int, proxy_type: str) -> None:
-        """Add a new proxy configuration."""
-        self.proxies[name] = {
-            'host': host,
-            'port': port,
-            'type': proxy_type
-        }
-        console.print(f"[green]Added proxy:[/] {name} ({proxy_type}://{host}:{port})")
-        self.save_config()
-
-    def remove_proxy(self, name: str) -> None:
-        """Remove a proxy from the proxy list."""
-        if name in self.proxies:
-            del self.proxies[name]
-            self.save_config()
-
-    def create_proxy_chain(self, proxy_names: List[str]) -> None:
-        """Create a chain of proxies."""
-        chain = []
-        for name in proxy_names:
-            if name in self.proxies:
-                chain.append(self.proxies[name])
+            # Try to load from file
+            if os.path.exists('data/user_agents.json'):
+                with open('data/user_agents.json', 'r') as f:
+                    self.user_agents = json.load(f)
             else:
-                console.print(f"[red]Proxy not found:[/] {name}")
+                # Use default list
+                self.user_agents = [
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59',
+                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/77.0.4054.254',
+                    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+                    'Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
+                    'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+                    'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36'
+                ]
+        except Exception as e:
+            logger.error(f"Error loading user agents: {str(e)}")
+            self.user_agents = []
+
+    def _load_proxies(self) -> None:
+        """Load proxies from file or API."""
+        try:
+            # Try to load from file
+            if os.path.exists('data/proxies.json'):
+                with open('data/proxies.json', 'r') as f:
+                    self.proxies = json.load(f)
+            else:
+                # Use default list
+                self.proxies = [
+                    'http://proxy1.example.com:8080',
+                    'http://proxy2.example.com:8080',
+                    'http://proxy3.example.com:8080'
+                ]
+        except Exception as e:
+            logger.error(f"Error loading proxies: {str(e)}")
+            self.proxies = []
+
+    @handle_timeout
+    def rotate_proxy(self) -> None:
+        """Rotate to a new proxy."""
+        try:
+            if not self.proxies:
+                logger.warning("No proxies available")
                 return
-        
-        self.proxy_chains.append(chain)
-        console.print(f"[green]Created proxy chain with {len(chain)} proxies[/]")
-        self.save_config()
 
-    def set_rate_limit(self, domain: str, requests_per_second: float) -> None:
-        """Set rate limit for a domain."""
-        self.rate_limits[domain] = requests_per_second
-        console.print(f"[green]Set rate limit for {domain}:[/] {requests_per_second} requests/second")
-        self.save_config()
+            # Check if it's time to rotate
+            current_time = time.time()
+            if current_time - self.last_proxy_rotation < self.proxy_rotation_interval:
+                return
 
-    def check_rate_limit(self, domain: str) -> bool:
-        """Check if a request to a domain should be rate limited."""
-        if domain not in self.rate_limits:
-            return True
-        
-        current_time = time.time()
-        if domain not in self.last_request_time:
-            self.last_request_time[domain] = current_time
-            return True
-        
-        time_diff = current_time - self.last_request_time[domain]
-        min_interval = 1.0 / self.rate_limits[domain]
-        
-        if time_diff < min_interval:
-            time.sleep(min_interval - time_diff)
-        
-        self.last_request_time[domain] = time.time()
-        return True
+            # Select a new proxy
+            new_proxy = random.choice(self.proxies)
+            while new_proxy == self.current_proxy and len(self.proxies) > 1:
+                new_proxy = random.choice(self.proxies)
 
-    def _get_proxy_url(self, proxy_name: str) -> str:
-        """Get proxy URL for a specific proxy."""
-        proxy = self.proxies[proxy_name]
-        return f"{proxy['type']}://{proxy['host']}:{proxy['port']}"
+            # Test the proxy
+            if self._test_proxy(new_proxy):
+                self.current_proxy = new_proxy
+                self.session.proxies = {
+                    'http': new_proxy,
+                    'https': new_proxy
+                }
+                self.last_proxy_rotation = current_time
+                logger.info(f"Rotated to new proxy: {new_proxy}")
+            else:
+                logger.warning(f"Proxy test failed: {new_proxy}")
+        except Exception as e:
+            logger.error(f"Error rotating proxy: {str(e)}")
 
-    def _setup_proxy_chain(self, chain: List[dict]) -> Dict:
-        """Setup a chain of proxies."""
-        if not chain:
-            return {}
-        
-        proxies = {}
-        for i, proxy in enumerate(chain):
-            if proxy['type'] == 'socks5':
-                if i == 0:
-                    proxies['http'] = f"socks5://{proxy['host']}:{proxy['port']}"
-                    proxies['https'] = f"socks5://{proxy['host']}:{proxy['port']}"
+    @handle_timeout
+    def rotate_user_agent(self) -> None:
+        """Rotate to a new user agent."""
+        try:
+            if not self.user_agents:
+                logger.warning("No user agents available")
+                return
+
+            # Check if it's time to rotate
+            current_time = time.time()
+            if current_time - self.last_user_agent_rotation < self.user_agent_rotation_interval:
+                return
+
+            # Select a new user agent
+            new_user_agent = random.choice(self.user_agents)
+            while new_user_agent == self.current_user_agent and len(self.user_agents) > 1:
+                new_user_agent = random.choice(self.user_agents)
+
+            self.current_user_agent = new_user_agent
+            self.session.headers.update({'User-Agent': new_user_agent})
+            self.last_user_agent_rotation = current_time
+            logger.info(f"Rotated to new user agent: {new_user_agent}")
+        except Exception as e:
+            logger.error(f"Error rotating user agent: {str(e)}")
+
+    @handle_timeout
+    def _test_proxy(self, proxy: str) -> bool:
+        """Test if a proxy is working."""
+        try:
+            test_url = 'https://api.ipify.org?format=json'
+            proxies = {
+                'http': proxy,
+                'https': proxy
+            }
+            response = requests.get(test_url, proxies=proxies, timeout=self.timeout)
+            return response.status_code == 200
+        except:
+            return False
+
+    @handle_timeout
+    def setup_proxy_chain(self, chain: List[str]) -> None:
+        """Set up a chain of proxies."""
+        try:
+            if not chain:
+                logger.warning("No proxies in chain")
+                return
+
+            # Test each proxy in the chain
+            working_proxies = []
+            for proxy in chain:
+                if self._test_proxy(proxy):
+                    working_proxies.append(proxy)
                 else:
-                    # For chained SOCKS proxies, we need to use a different approach
-                    # This is a simplified version - in reality, you'd need to handle
-                    # the chaining of SOCKS proxies differently
-                    pass
-            else:
-                proxies['http'] = f"http://{proxy['host']}:{proxy['port']}"
-                proxies['https'] = f"https://{proxy['host']}:{proxy['port']}"
-        
-        return proxies
+                    logger.warning(f"Proxy test failed: {proxy}")
 
-    def make_request(self, url: str, method: str = 'GET', 
-                    use_proxy: Optional[str] = None,
-                    use_chain: Optional[List[str]] = None,
-                    **kwargs) -> requests.Response:
-        """Make a request with privacy features."""
-        try:
-            # Rotate user agent
-            self.rotate_user_agent()
-            
-            # Check rate limit
-            self.check_rate_limit(urlparse(url).netloc)
-            
-            # Setup proxies
-            if use_chain:
-                proxies = self._setup_proxy_chain(use_chain)
-            elif use_proxy and use_proxy in self.proxies:
-                proxies = {
-                    'http': self._get_proxy_url(use_proxy),
-                    'https': self._get_proxy_url(use_proxy)
+            if working_proxies:
+                self.proxy_chain = working_proxies
+                self.current_proxy = working_proxies[0]
+                self.session.proxies = {
+                    'http': self.current_proxy,
+                    'https': self.current_proxy
                 }
+                logger.info(f"Set up proxy chain with {len(working_proxies)} working proxies")
             else:
-                proxies = {}
-            
-            # Make request
-            response = self.session.request(
-                method=method,
-                url=url,
-                proxies=proxies,
-                **kwargs
-            )
-            
-            # Update request history
-            with self.lock:
-                if url not in self.request_history:
-                    self.request_history[url] = []
-                self.request_history[url].append({
-                    'timestamp': datetime.now().isoformat(),
-                    'method': method,
-                    'status_code': response.status_code,
-                    'proxy_used': use_proxy or use_chain
-                })
-            
-            return response
+                logger.warning("No working proxies in chain")
         except Exception as e:
-            console.print(f"[red]Error making request: {str(e)}[/]")
-            raise
+            logger.error(f"Error setting up proxy chain: {str(e)}")
 
-    async def make_async_request(self, url: str, method: str = 'GET',
-                               use_proxy: Optional[str] = None,
-                               use_chain: Optional[List[str]] = None,
-                               **kwargs) -> aiohttp.ClientResponse:
-        """Make an asynchronous request with privacy features."""
+    @handle_timeout
+    def rotate_proxy_chain(self) -> None:
+        """Rotate through the proxy chain."""
         try:
-            # Rotate user agent
-            self.rotate_user_agent()
-            
-            # Check rate limit
-            self.check_rate_limit(urlparse(url).netloc)
-            
-            # Setup proxies
-            if use_chain:
-                proxies = self._setup_proxy_chain(use_chain)
-            elif use_proxy and use_proxy in self.proxies:
-                proxies = {
-                    'http': self._get_proxy_url(use_proxy),
-                    'https': self._get_proxy_url(use_proxy)
+            if not self.proxy_chain:
+                logger.warning("No proxy chain available")
+                return
+
+            # Check if it's time to rotate
+            current_time = time.time()
+            if current_time - self.last_proxy_rotation < self.proxy_rotation_interval:
+                return
+
+            # Get current proxy index
+            current_index = self.proxy_chain.index(self.current_proxy) if self.current_proxy in self.proxy_chain else -1
+
+            # Select next proxy
+            next_index = (current_index + 1) % len(self.proxy_chain)
+            new_proxy = self.proxy_chain[next_index]
+
+            # Test the proxy
+            if self._test_proxy(new_proxy):
+                self.current_proxy = new_proxy
+                self.session.proxies = {
+                    'http': new_proxy,
+                    'https': new_proxy
                 }
+                self.last_proxy_rotation = current_time
+                logger.info(f"Rotated to next proxy in chain: {new_proxy}")
             else:
-                proxies = {}
-            
-            # Make async request
-            async with aiohttp.ClientSession() as session:
-                async with session.request(
-                    method=method,
-                    url=url,
-                    proxy=proxies.get('http'),
-                    **kwargs
-                ) as response:
-                    # Update request history
-                    with self.lock:
-                        if url not in self.request_history:
-                            self.request_history[url] = []
-                        self.request_history[url].append({
-                            'timestamp': datetime.now().isoformat(),
-                            'method': method,
-                            'status_code': response.status,
-                            'proxy_used': use_proxy or use_chain
-                        })
-                    
-                    return response
+                logger.warning(f"Proxy test failed: {new_proxy}")
         except Exception as e:
-            console.print(f"[red]Error making async request: {str(e)}[/]")
-            raise
+            logger.error(f"Error rotating proxy chain: {str(e)}")
 
-    def get_request_history(self, url: Optional[str] = None) -> Dict:
-        """Get request history for a specific URL or all URLs."""
-        with self.lock:
-            if url:
-                return self.request_history.get(url, [])
-            return self.request_history
+    @handle_timeout
+    def add_proxy(self, proxy: str) -> None:
+        """Add a new proxy to the list."""
+        try:
+            if proxy in self.proxies:
+                logger.warning(f"Proxy already exists: {proxy}")
+                return
 
-    def clear_request_history(self) -> None:
-        """Clear request history."""
-        with self.lock:
-            self.request_history.clear()
+            # Test the proxy
+            if self._test_proxy(proxy):
+                self.proxies.append(proxy)
+                logger.info(f"Added new proxy: {proxy}")
+            else:
+                logger.warning(f"Proxy test failed: {proxy}")
+        except Exception as e:
+            logger.error(f"Error adding proxy: {str(e)}")
 
-    def display_privacy_status(self) -> None:
-        """Display current privacy settings."""
-        table = Table(title="Privacy Status")
-        table.add_column("Setting", style="cyan")
-        table.add_column("Value", style="green")
-        
-        # User Agent
-        table.add_row("Current User-Agent", self.current_user_agent)
-        
-        # Proxies
-        proxy_count = len(self.proxies)
-        table.add_row("Configured Proxies", str(proxy_count))
-        
-        # Proxy Chains
-        chain_count = len(self.proxy_chains)
-        table.add_row("Active Proxy Chains", str(chain_count))
-        
-        # Rate Limits
-        rate_limits = ", ".join(f"{domain}: {rate}/s" for domain, rate in self.rate_limits.items())
-        table.add_row("Rate Limits", rate_limits or "None")
-        
-        console.print(table)
+    @handle_timeout
+    def remove_proxy(self, proxy: str) -> None:
+        """Remove a proxy from the list."""
+        try:
+            if proxy not in self.proxies:
+                logger.warning(f"Proxy not found: {proxy}")
+                return
 
+            self.proxies.remove(proxy)
+            if proxy == self.current_proxy:
+                self.current_proxy = None
+                self.session.proxies = {}
+            logger.info(f"Removed proxy: {proxy}")
+        except Exception as e:
+            logger.error(f"Error removing proxy: {str(e)}")
+
+    @handle_timeout
+    def add_user_agent(self, user_agent: str) -> None:
+        """Add a new user agent to the list."""
+        try:
+            if user_agent in self.user_agents:
+                logger.warning(f"User agent already exists: {user_agent}")
+                return
+
+            self.user_agents.append(user_agent)
+            logger.info(f"Added new user agent: {user_agent}")
+        except Exception as e:
+            logger.error(f"Error adding user agent: {str(e)}")
+
+    @handle_timeout
+    def remove_user_agent(self, user_agent: str) -> None:
+        """Remove a user agent from the list."""
+        try:
+            if user_agent not in self.user_agents:
+                logger.warning(f"User agent not found: {user_agent}")
+                return
+
+            self.user_agents.remove(user_agent)
+            if user_agent == self.current_user_agent:
+                self.current_user_agent = None
+                self.session.headers.pop('User-Agent', None)
+            logger.info(f"Removed user agent: {user_agent}")
+        except Exception as e:
+            logger.error(f"Error removing user agent: {str(e)}")
+
+    @handle_timeout
+    def get_current_proxy(self) -> Optional[str]:
+        """Get the current proxy."""
+        return self.current_proxy
+
+    @handle_timeout
+    def get_current_user_agent(self) -> Optional[str]:
+        """Get the current user agent."""
+        return self.current_user_agent
+
+    @handle_timeout
+    def get_proxy_list(self) -> List[str]:
+        """Get the list of proxies."""
+        return self.proxies
+
+    @handle_timeout
+    def get_user_agent_list(self) -> List[str]:
+        """Get the list of user agents."""
+        return self.user_agents
+
+    @handle_timeout
+    def get_proxy_chain(self) -> List[str]:
+        """Get the current proxy chain."""
+        return self.proxy_chain
+
+    @handle_timeout
+    def clear_proxy_chain(self) -> None:
+        """Clear the proxy chain."""
+        try:
+            self.proxy_chain = []
+            self.current_proxy = None
+            self.session.proxies = {}
+            logger.info("Cleared proxy chain")
+        except Exception as e:
+            logger.error(f"Error clearing proxy chain: {str(e)}")
+
+    @handle_timeout
+    def save_proxies(self) -> None:
+        """Save proxies to file."""
+        try:
+            os.makedirs('data', exist_ok=True)
+            with open('data/proxies.json', 'w') as f:
+                json.dump(self.proxies, f)
+            logger.info("Saved proxies to file")
+        except Exception as e:
+            logger.error(f"Error saving proxies: {str(e)}")
+
+    @handle_timeout
+    def save_user_agents(self) -> None:
+        """Save user agents to file."""
+        try:
+            os.makedirs('data', exist_ok=True)
+            with open('data/user_agents.json', 'w') as f:
+                json.dump(self.user_agents, f)
+            logger.info("Saved user agents to file")
+        except Exception as e:
+            logger.error(f"Error saving user agents: {str(e)}")
+
+    @handle_timeout
+    def load_proxies(self) -> None:
+        """Load proxies from file."""
+        try:
+            if os.path.exists('data/proxies.json'):
+                with open('data/proxies.json', 'r') as f:
+                    self.proxies = json.load(f)
+                logger.info("Loaded proxies from file")
+            else:
+                logger.warning("Proxies file not found")
+        except Exception as e:
+            logger.error(f"Error loading proxies: {str(e)}")
+
+    @handle_timeout
+    def load_user_agents(self) -> None:
+        """Load user agents from file."""
+        try:
+            if os.path.exists('data/user_agents.json'):
+                with open('data/user_agents.json', 'r') as f:
+                    self.user_agents = json.load(f)
+                logger.info("Loaded user agents from file")
+            else:
+                logger.warning("User agents file not found")
+        except Exception as e:
+            logger.error(f"Error loading user agents: {str(e)}")
+
+    @handle_timeout
+    def update_proxy_rotation_interval(self, interval: int) -> None:
+        """Update the proxy rotation interval."""
+        try:
+            if interval < 0:
+                logger.warning("Invalid interval: must be positive")
+                return
+
+            self.proxy_rotation_interval = interval
+            logger.info(f"Updated proxy rotation interval to {interval} seconds")
+        except Exception as e:
+            logger.error(f"Error updating proxy rotation interval: {str(e)}")
+
+    @handle_timeout
+    def update_user_agent_rotation_interval(self, interval: int) -> None:
+        """Update the user agent rotation interval."""
+        try:
+            if interval < 0:
+                logger.warning("Invalid interval: must be positive")
+                return
+
+            self.user_agent_rotation_interval = interval
+            logger.info(f"Updated user agent rotation interval to {interval} seconds")
+        except Exception as e:
+            logger.error(f"Error updating user agent rotation interval: {str(e)}")
+
+    @handle_timeout
+    def get_proxy_rotation_interval(self) -> int:
+        """Get the current proxy rotation interval."""
+        return self.proxy_rotation_interval
+
+    @handle_timeout
+    def get_user_agent_rotation_interval(self) -> int:
+        """Get the current user agent rotation interval."""
+        return self.user_agent_rotation_interval
+
+    @handle_timeout
+    def get_last_proxy_rotation(self) -> float:
+        """Get the timestamp of the last proxy rotation."""
+        return self.last_proxy_rotation
+
+    @handle_timeout
+    def get_last_user_agent_rotation(self) -> float:
+        """Get the timestamp of the last user agent rotation."""
+        return self.last_user_agent_rotation
+
+    @handle_timeout
     def get_session(self) -> requests.Session:
-        """Get a requests session with current privacy settings."""
-        session = requests.Session()
-        session.headers.update({'User-Agent': self.current_user_agent})
-        
-        # Apply proxy if configured
-        if self.proxy_chains:
-            # Use the first proxy chain
-            chain = self.proxy_chains[0]
-            if chain:
-                proxy = chain[0]  # Use the first proxy in the chain
-                session.proxies = {
-                    'http': f"{proxy['type']}://{proxy['host']}:{proxy['port']}",
-                    'https': f"{proxy['type']}://{proxy['host']}:{proxy['port']}"
-                }
-        
-        return session 
+        """Get the current session."""
+        return self.session
+
+    @handle_timeout
+    def update_session(self, session: requests.Session) -> None:
+        """Update the current session."""
+        try:
+            self.session = session
+            logger.info("Updated session")
+        except Exception as e:
+            logger.error(f"Error updating session: {str(e)}")
+
+    @handle_timeout
+    def clear_session(self) -> None:
+        """Clear the current session."""
+        try:
+            self.session = requests.Session()
+            self.session.verify = False
+            logger.info("Cleared session")
+        except Exception as e:
+            logger.error(f"Error clearing session: {str(e)}")
+
+    @handle_timeout
+    def update_timeout(self, timeout: int) -> None:
+        """Update the timeout value."""
+        try:
+            if timeout < 0:
+                logger.warning("Invalid timeout: must be positive")
+                return
+
+            self.timeout = timeout
+            logger.info(f"Updated timeout to {timeout} seconds")
+        except Exception as e:
+            logger.error(f"Error updating timeout: {str(e)}")
+
+    @handle_timeout
+    def update_retry_count(self, count: int) -> None:
+        """Update the retry count."""
+        try:
+            if count < 0:
+                logger.warning("Invalid retry count: must be positive")
+                return
+
+            self.retry_count = count
+            logger.info(f"Updated retry count to {count}")
+        except Exception as e:
+            logger.error(f"Error updating retry count: {str(e)}")
+
+    @handle_timeout
+    def update_retry_delay(self, delay: int) -> None:
+        """Update the retry delay."""
+        try:
+            if delay < 0:
+                logger.warning("Invalid retry delay: must be positive")
+                return
+
+            self.retry_delay = delay
+            logger.info(f"Updated retry delay to {delay} seconds")
+        except Exception as e:
+            logger.error(f"Error updating retry delay: {str(e)}")
+
+    @handle_timeout
+    def get_timeout(self) -> int:
+        """Get the current timeout value."""
+        return self.timeout
+
+    @handle_timeout
+    def get_retry_count(self) -> int:
+        """Get the current retry count."""
+        return self.retry_count
+
+    @handle_timeout
+    def get_retry_delay(self) -> int:
+        """Get the current retry delay."""
+        return self.retry_delay
+
+# Create global instance
+privacy_manager = PrivacyManager() 

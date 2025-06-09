@@ -1,468 +1,425 @@
-# Discord Webhook Manager for E502 OSINT Terminal
-# Handles Discord webhook integration for real-time notifications and reporting.
-# Built by z3r0s / Error502
+"""
+Discord Webhook Manager for E502 OSINT Terminal
+Provides comprehensive Discord integration for scan notifications and reporting.
+"""
 
-import json
 import os
-import requests
-from typing import Optional, Dict, Any, List
+import json
+import logging
+from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
-from rich.console import Console
-from rich.prompt import Prompt
-import asyncio
+import pytz
+from pathlib import Path
+from dataclasses import dataclass, asdict
+import shutil
+import hashlib
+import platform
 import aiohttp
-import concurrent.futures
-import functools
+import asyncio
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from jinja2 import Environment, FileSystemLoader
+import yaml
 
+logger = logging.getLogger("E502OSINT.DiscordWebhook")
 console = Console()
+
+@dataclass
+class ScanResult:
+    """Class for storing scan results."""
+    target: str
+    scan_type: str
+    timestamp: datetime
+    status: str
+    findings: Dict[str, Any]
+    duration: float
+    error: Optional[str]
+    scan_id: str
+    profile: str
+    tags: List[str]
 
 class DiscordWebhookManager:
     def __init__(self):
-        self.webhook_url: Optional[str] = None
-        self.config_file = "discord_config.json"
-        self.load_config()
-        self.scan_history: List[Dict] = []
-        self.max_history = 100
-        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-
-    async def async_run_in_thread(self, func, *args, **kwargs):
-        """Run a blocking function in a thread pool."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.thread_pool, 
-            functools.partial(func, *args, **kwargs)
-        )
-
-    async def load_config_async(self) -> None:
-        """Load webhook configuration from file asynchronously."""
-        await self.async_run_in_thread(self.load_config)
-
-    def load_config(self) -> None:
-        # Load webhook configuration from file
+        self.config_dir = Path("config/discord")
+        self.templates_dir = Path("templates/discord")
+        self.history_dir = Path("data/discord/history")
+        self._ensure_dirs()
+        self._load_config()
+        self._load_templates()
+        self.max_history = 1000
+        self.history: List[ScanResult] = []
+    
+    def _ensure_dirs(self) -> None:
+        """Ensure required directories exist."""
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _load_config(self) -> None:
+        """Load Discord configuration."""
         try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    config = json.load(f)
-                    self.webhook_url = config.get('webhook_url')
+            config_path = self.config_dir / "config.json"
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    self.config = json.load(f)
+            else:
+                self.config = {
+                    'webhook_url': '',
+                    'username': 'E502 OSINT Scanner',
+                    'avatar_url': '',
+                    'color_scheme': {
+                        'success': 0x00ff00,
+                        'warning': 0xffff00,
+                        'error': 0xff0000,
+                        'info': 0x0000ff
+                    },
+                    'notification_settings': {
+                        'scan_start': True,
+                        'scan_complete': True,
+                        'scan_error': True,
+                        'critical_findings': True
+                    }
+                }
+                self._save_config()
         except Exception as e:
-            console.print(f"[red]Error loading Discord configuration: {str(e)}[/]")
-
-    async def save_config_async(self) -> None:
-        """Save webhook configuration to file asynchronously."""
-        await self.async_run_in_thread(self.save_config)
-
-    def save_config(self) -> None:
-        # Save webhook configuration to file
+            logger.error(f"Error loading Discord config: {str(e)}")
+            self.config = {}
+    
+    def _save_config(self) -> None:
+        """Save Discord configuration."""
         try:
-            config = {'webhook_url': self.webhook_url}
-            with open(self.config_file, 'w') as f:
-                json.dump(config, f)
+            config_path = self.config_dir / "config.json"
+            with open(config_path, 'w') as f:
+                json.dump(self.config, f, indent=4)
         except Exception as e:
-            console.print(f"[red]Error saving Discord configuration: {str(e)}[/]")
-
-    async def set_webhook_async(self, webhook_url: str, save: bool = False) -> None:
-        """Set the Discord webhook URL asynchronously."""
-        self.webhook_url = webhook_url
-        if save:
-            await self.save_config_async()
-            console.print("[green]Webhook URL saved to configuration.[/]")
-        else:
-            console.print("[yellow]Webhook URL set temporarily (not saved).[/]")
-
-    def set_webhook(self, webhook_url: str, save: bool = False) -> None:
-        # Set the Discord webhook URL
-        self.webhook_url = webhook_url
-        if save:
-            self.save_config()
-            console.print("[green]Webhook URL saved to configuration.[/]")
-        else:
-            console.print("[yellow]Webhook URL set temporarily (not saved).[/]")
-
-    async def send_message_async(self, content: str, embed: Optional[Dict[str, Any]] = None) -> bool:
-        """Send a message to Discord using the webhook asynchronously."""
-        if not self.webhook_url:
-            console.print("[red]No webhook URL configured. Use 'discord set' to configure.[/]")
-            return False
-
+            logger.error(f"Error saving Discord config: {str(e)}")
+    
+    def _load_templates(self) -> None:
+        """Load Discord message templates."""
         try:
-            payload = {'content': content}
-            if embed:
-                payload['embeds'] = [embed]
-
+            self.template_env = Environment(
+                loader=FileSystemLoader(self.templates_dir)
+            )
+            self.templates = {
+                'scan_start': self.template_env.get_template('scan_start.txt'),
+                'scan_complete': self.template_env.get_template('scan_complete.txt'),
+                'scan_error': self.template_env.get_template('scan_error.txt'),
+                'critical_findings': self.template_env.get_template('critical_findings.txt')
+            }
+        except Exception as e:
+            logger.error(f"Error loading Discord templates: {str(e)}")
+            self.templates = {}
+    
+    async def send_message(self, content: str, embed: Optional[Dict[str, Any]] = None) -> bool:
+        """Send a message to Discord webhook."""
+        try:
+            if not self.config.get('webhook_url'):
+                logger.error("Discord webhook URL not configured")
+                return False
+            
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.webhook_url,
-                    json=payload,
-                    headers={'Content-Type': 'application/json'}
-                ) as response:
+                payload = {
+                    'content': content,
+                    'username': self.config.get('username', 'E502 OSINT Scanner'),
+                    'avatar_url': self.config.get('avatar_url', '')
+                }
+                
+                if embed:
+                    payload['embeds'] = [embed]
+                
+                async with session.post(self.config['webhook_url'], json=payload) as response:
                     if response.status == 204:
                         return True
                     else:
-                        console.print(f"[red]Error sending Discord message: {response.status}[/]")
+                        logger.error(f"Error sending Discord message: {response.status}")
                         return False
+                
         except Exception as e:
-            console.print(f"[red]Error sending Discord message: {str(e)}[/]")
+            logger.error(f"Error sending Discord message: {str(e)}")
             return False
-
-    def send_message(self, content: str, embed: Optional[Dict[str, Any]] = None) -> bool:
-        # Send a message to Discord using the webhook
-        if not self.webhook_url:
-            console.print("[red]No webhook URL configured. Use 'discord set' to configure.[/]")
-            return False
-
+    
+    async def send_alert(self, title: str, description: str, alert_type: str = 'info') -> bool:
+        """Send an alert to Discord webhook."""
         try:
-            payload = {'content': content}
-            if embed:
-                payload['embeds'] = [embed]
-
-            response = requests.post(
-                self.webhook_url,
-                json=payload,
-                headers={'Content-Type': 'application/json'}
-            )
+            color = self.config['color_scheme'].get(alert_type, 0x000000)
             
-            if response.status_code == 204:
-                return True
-            else:
-                console.print(f"[red]Error sending Discord message: {response.status_code}[/]")
-                return False
+            embed = {
+                'title': title,
+                'description': description,
+                'color': color,
+                'timestamp': datetime.now(pytz.UTC).isoformat()
+            }
+            
+            return await self.send_message('', embed)
+            
         except Exception as e:
-            console.print(f"[red]Error sending Discord message: {str(e)}[/]")
+            logger.error(f"Error sending Discord alert: {str(e)}")
             return False
-
-    async def send_network_scan_result_async(self, target: str, results: Dict[str, Any]) -> None:
-        """Send network scan results with specialized formatting asynchronously."""
-        embed = {
-            "title": "🔍 E502 Network Analysis",
-            "description": f"Network scan completed for `{target}`",
-            "color": 0x3498db,
-            "fields": [
-                {
-                    "name": "📊 Scan Summary",
-                    "value": f"• Hosts Found: {results.get('hosts_found', 'N/A')}\n"
-                            f"• Open Ports: {results.get('open_ports', 'N/A')}\n"
-                            f"• Services Detected: {results.get('services', 'N/A')}",
-                    "inline": False
-                },
-                {
-                    "name": "⏰ Timestamp",
-                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Network Analysis Module"
+    
+    async def send_network_scan_result(self, result: ScanResult) -> bool:
+        """Send network scan results to Discord."""
+        try:
+            # Create embed
+            embed = {
+                'title': f"Network Scan Results: {result.target}",
+                'description': f"Scan completed in {result.duration:.2f} seconds",
+                'color': self.config['color_scheme']['success'] if result.status == 'success' else self.config['color_scheme']['error'],
+                'timestamp': result.timestamp.isoformat(),
+                'fields': []
             }
-        }
-        await self.send_message_async("", embed=embed)
-        await self._add_to_history_async("network", target, results)
-
-    def send_network_scan_result(self, target: str, results: Dict[str, Any]) -> None:
-        # Send network scan results with specialized formatting
-        embed = {
-            "title": "🔍 E502 Network Analysis",
-            "description": f"Network scan completed for `{target}`",
-            "color": 0x3498db,
-            "fields": [
-                {
-                    "name": "📊 Scan Summary",
-                    "value": f"• Hosts Found: {results.get('hosts_found', 'N/A')}\n"
-                            f"• Open Ports: {results.get('open_ports', 'N/A')}\n"
-                            f"• Services Detected: {results.get('services', 'N/A')}",
-                    "inline": False
-                },
-                {
-                    "name": "⏰ Timestamp",
-                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Network Analysis Module"
+            
+            # Add findings
+            if result.findings:
+                for key, value in result.findings.items():
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, indent=2)
+                    embed['fields'].append({
+                        'name': key,
+                        'value': str(value),
+                        'inline': False
+                    })
+            
+            # Add error if any
+            if result.error:
+                embed['fields'].append({
+                    'name': 'Error',
+                    'value': result.error,
+                    'inline': False
+                })
+            
+            # Send message
+            return await self.send_message('', embed)
+            
+        except Exception as e:
+            logger.error(f"Error sending network scan results: {str(e)}")
+            return False
+    
+    async def send_web_scan_result(self, result: ScanResult) -> bool:
+        """Send web scan results to Discord."""
+        try:
+            # Create embed
+            embed = {
+                'title': f"Web Scan Results: {result.target}",
+                'description': f"Scan completed in {result.duration:.2f} seconds",
+                'color': self.config['color_scheme']['success'] if result.status == 'success' else self.config['color_scheme']['error'],
+                'timestamp': result.timestamp.isoformat(),
+                'fields': []
             }
-        }
-        self.send_message("", embed=embed)
-        self._add_to_history("network", target, results)
-
-    async def send_web_scan_result_async(self, target: str, results: Dict[str, Any]) -> None:
-        """Send web scan results with specialized formatting asynchronously."""
-        embed = {
-            "title": "🌐 E502 Web Analysis",
-            "description": f"Web scan completed for `{target}`",
-            "color": 0x2ecc71,
-            "fields": [
-                {
-                    "name": "🔧 Technologies",
-                    "value": "\n".join(f"• {tech}" for tech in results.get('technologies', [])),
-                    "inline": False
-                },
-                {
-                    "name": "🛡️ Security Headers",
-                    "value": "\n".join(f"• {header}: {value}" for header, value in results.get('security_headers', {}).items()),
-                    "inline": False
-                },
-                {
-                    "name": "⏰ Timestamp",
-                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Web Analysis Module"
+            
+            # Add findings
+            if result.findings:
+                for key, value in result.findings.items():
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, indent=2)
+                    embed['fields'].append({
+                        'name': key,
+                        'value': str(value),
+                        'inline': False
+                    })
+            
+            # Add error if any
+            if result.error:
+                embed['fields'].append({
+                    'name': 'Error',
+                    'value': result.error,
+                    'inline': False
+                })
+            
+            # Send message
+            return await self.send_message('', embed)
+            
+        except Exception as e:
+            logger.error(f"Error sending web scan results: {str(e)}")
+            return False
+    
+    async def send_ssl_scan_result(self, result: ScanResult) -> bool:
+        """Send SSL scan results to Discord."""
+        try:
+            # Create embed
+            embed = {
+                'title': f"SSL Scan Results: {result.target}",
+                'description': f"Scan completed in {result.duration:.2f} seconds",
+                'color': self.config['color_scheme']['success'] if result.status == 'success' else self.config['color_scheme']['error'],
+                'timestamp': result.timestamp.isoformat(),
+                'fields': []
             }
-        }
-        await self.send_message_async("", embed=embed)
-        await self._add_to_history_async("web", target, results)
-
-    def send_web_scan_result(self, target: str, results: Dict[str, Any]) -> None:
-        # Send web scan results with specialized formatting
-        embed = {
-            "title": "🌐 E502 Web Analysis",
-            "description": f"Web scan completed for `{target}`",
-            "color": 0x2ecc71,
-            "fields": [
-                {
-                    "name": "🔧 Technologies",
-                    "value": "\n".join(f"• {tech}" for tech in results.get('technologies', [])),
-                    "inline": False
-                },
-                {
-                    "name": "🛡️ Security Headers",
-                    "value": "\n".join(f"• {header}: {value}" for header, value in results.get('security_headers', {}).items()),
-                    "inline": False
-                },
-                {
-                    "name": "⏰ Timestamp",
-                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Web Analysis Module"
+            
+            # Add findings
+            if result.findings:
+                for key, value in result.findings.items():
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, indent=2)
+                    embed['fields'].append({
+                        'name': key,
+                        'value': str(value),
+                        'inline': False
+                    })
+            
+            # Add error if any
+            if result.error:
+                embed['fields'].append({
+                    'name': 'Error',
+                    'value': result.error,
+                    'inline': False
+                })
+            
+            # Send message
+            return await self.send_message('', embed)
+            
+        except Exception as e:
+            logger.error(f"Error sending SSL scan results: {str(e)}")
+            return False
+    
+    async def send_vuln_scan_result(self, result: ScanResult) -> bool:
+        """Send vulnerability scan results to Discord."""
+        try:
+            # Create embed
+            embed = {
+                'title': f"Vulnerability Scan Results: {result.target}",
+                'description': f"Scan completed in {result.duration:.2f} seconds",
+                'color': self.config['color_scheme']['success'] if result.status == 'success' else self.config['color_scheme']['error'],
+                'timestamp': result.timestamp.isoformat(),
+                'fields': []
             }
-        }
-        self.send_message("", embed=embed)
-        self._add_to_history("web", target, results)
+            
+            # Add findings
+            if result.findings:
+                for key, value in result.findings.items():
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, indent=2)
+                    embed['fields'].append({
+                        'name': key,
+                        'value': str(value),
+                        'inline': False
+                    })
+            
+            # Add error if any
+            if result.error:
+                embed['fields'].append({
+                    'name': 'Error',
+                    'value': result.error,
+                    'inline': False
+                })
+            
+            # Send message
+            return await self.send_message('', embed)
+            
+        except Exception as e:
+            logger.error(f"Error sending vulnerability scan results: {str(e)}")
+            return False
+    
+    def add_scan_result(self, result: ScanResult) -> None:
+        """Add scan result to history."""
+        try:
+            self.history.append(result)
+            
+            # Trim history if needed
+            if len(self.history) > self.max_history:
+                self.history = self.history[-self.max_history:]
+            
+            # Save history
+            self._save_history()
+            
+        except Exception as e:
+            logger.error(f"Error adding scan result: {str(e)}")
+    
+    def _save_history(self) -> None:
+        """Save scan history."""
+        try:
+            history_path = self.history_dir / "history.json"
+            with open(history_path, 'w') as f:
+                json.dump([asdict(result) for result in self.history], f, indent=4, default=str)
+        except Exception as e:
+            logger.error(f"Error saving scan history: {str(e)}")
+    
+    def get_scan_history(self, scan_type: Optional[str] = None, target: Optional[str] = None,
+                        profile: Optional[str] = None, tag: Optional[str] = None,
+                        start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[ScanResult]:
+        """Get scan history with filters."""
+        try:
+            filtered_history = self.history
+            
+            if scan_type:
+                filtered_history = [r for r in filtered_history if r.scan_type == scan_type]
+            
+            if target:
+                filtered_history = [r for r in filtered_history if r.target == target]
+            
+            if profile:
+                filtered_history = [r for r in filtered_history if r.profile == profile]
+            
+            if tag:
+                filtered_history = [r for r in filtered_history if tag in r.tags]
+            
+            if start_date:
+                filtered_history = [r for r in filtered_history if r.timestamp >= start_date]
+            
+            if end_date:
+                filtered_history = [r for r in filtered_history if r.timestamp <= end_date]
+            
+            return filtered_history
+            
+        except Exception as e:
+            logger.error(f"Error getting scan history: {str(e)}")
+            return []
+    
+    def export_history(self, format: str = 'json', output_path: Optional[str] = None) -> bool:
+        """Export scan history to file."""
+        try:
+            if not output_path:
+                output_path = self.history_dir / f"history_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{format}"
+            
+            if format == 'json':
+                with open(output_path, 'w') as f:
+                    json.dump([asdict(result) for result in self.history], f, indent=4, default=str)
+            elif format == 'csv':
+                df = pd.DataFrame([asdict(result) for result in self.history])
+                df.to_csv(output_path, index=False)
+            else:
+                logger.error(f"Unsupported export format: {format}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error exporting scan history: {str(e)}")
+            return False
+    
+    def display_history(self, history: List[ScanResult]) -> None:
+        """Display scan history in a formatted way."""
+        try:
+            # Create table
+            table = Table(title="Scan History")
+            table.add_column("Scan ID", style="cyan")
+            table.add_column("Target", style="green")
+            table.add_column("Type", style="yellow")
+            table.add_column("Status", style="magenta")
+            table.add_column("Timestamp", style="blue")
+            table.add_column("Duration", style="red")
+            
+            # Add rows
+            for result in history:
+                table.add_row(
+                    result.scan_id,
+                    result.target,
+                    result.scan_type,
+                    result.status,
+                    result.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    f"{result.duration:.2f}s"
+                )
+            
+            # Display table
+            console.print(table)
+            
+        except Exception as e:
+            logger.error(f"Error displaying scan history: {str(e)}")
+            console.print(f"[red]Error displaying scan history: {str(e)}[/]")
 
-    async def send_ssl_scan_result_async(self, target: str, results: Dict[str, Any]) -> None:
-        """Send SSL scan results with specialized formatting asynchronously."""
-        embed = self._create_ssl_embed(target, results)
-        await self.send_message_async("", embed=embed)
-        await self._add_to_history_async("ssl", target, results)
-        
-    def _create_ssl_embed(self, target: str, results: Dict[str, Any]) -> Dict:
-        """Create Discord embed for SSL scan results."""
-        return {
-            "title": "🔒 E502 SSL Analysis",
-            "description": f"SSL scan completed for `{target}`",
-            "color": 0xe74c3c,
-            "fields": [
-                {
-                    "name": "📜 Certificate Info",
-                    "value": f"• Issuer: {results.get('issuer', 'N/A')}\n"
-                            f"• Valid Until: {results.get('valid_until', 'N/A')}\n"
-                            f"• Key Size: {results.get('key_size', 'N/A')} bits",
-                    "inline": False
-                },
-                {
-                    "name": "🔍 Vulnerabilities",
-                    "value": "\n".join(f"• {vuln}" for vuln in results.get('vulnerabilities', [])),
-                    "inline": False
-                },
-                {
-                    "name": "⏰ Timestamp",
-                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | SSL Analysis Module"
-            }
-        }
-        
-    def send_ssl_scan_result(self, target: str, results: Dict[str, Any]) -> None:
-        # Send SSL scan results with specialized formatting
-        embed = self._create_ssl_embed(target, results)
-        self.send_message("", embed=embed)
-        self._add_to_history("ssl", target, results)
-        
-    async def send_vuln_scan_result_async(self, target: str, results: Dict[str, Any]) -> None:
-        """Send vulnerability scan results with specialized formatting asynchronously."""
-        embed = self._create_vuln_embed(target, results)
-        await self.send_message_async("", embed=embed)
-        await self._add_to_history_async("vulnerability", target, results)
-        
-    def _create_vuln_embed(self, target: str, results: Dict[str, Any]) -> Dict:
-        """Create Discord embed for vulnerability scan results."""
-        return {
-            "title": "⚠️ E502 Vulnerability Scan",
-            "description": f"Vulnerability scan completed for `{target}`",
-            "color": 0xf1c40f,
-            "fields": [
-                {
-                    "name": "🔴 High Risk",
-                    "value": "\n".join(f"• {vuln}" for vuln in results.get('high_risk', [])),
-                    "inline": False
-                },
-                {
-                    "name": "🟡 Medium Risk",
-                    "value": "\n".join(f"• {vuln}" for vuln in results.get('medium_risk', [])),
-                    "inline": False
-                },
-                {
-                    "name": "🟢 Low Risk",
-                    "value": "\n".join(f"• {vuln}" for vuln in results.get('low_risk', [])),
-                    "inline": False
-                },
-                {
-                    "name": "⏰ Timestamp",
-                    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Vulnerability Scanner Module"
-            }
-        }
-
-    def send_vuln_scan_result(self, target: str, results: Dict[str, Any]) -> None:
-        # Send vulnerability scan results with specialized formatting
-        embed = self._create_vuln_embed(target, results)
-        self.send_message("", embed=embed)
-        self._add_to_history("vulnerability", target, results)
-
-    async def send_alert_async(self, title: str, message: str, level: str = "info") -> bool:
-        """Send an alert to Discord asynchronously."""
-        colors = {
-            "info": 0x3498db,
-            "warning": 0xf1c40f,
-            "error": 0xe74c3c,
-            "success": 0x2ecc71
-        }
-        
-        embed = {
-            "title": f"⚠️ {title}",
-            "description": message,
-            "color": colors.get(level, 0x3498db),
-            "timestamp": datetime.now().isoformat(),
-            "footer": {
-                "text": f"E502 OSINT Terminal | Alert Level: {level.upper()}"
-            }
-        }
-        
-        return await self.send_message_async("", embed=embed)
-
-    def send_alert(self, title: str, message: str, level: str = "info") -> bool:
-        # Send an alert to Discord
-        colors = {
-            "info": 0x3498db,    # Blue
-            "warning": 0xf1c40f,  # Yellow
-            "error": 0xe74c3c,    # Red
-            "success": 0x2ecc71   # Green
-        }
-
-        icons = {
-            "info": "ℹ️",
-            "warning": "⚠️",
-            "error": "❌",
-            "success": "✅"
-        }
-
-        embed = {
-            "title": f"{icons.get(level, 'ℹ️')} E502 Alert: {title}",
-            "description": message,
-            "color": colors.get(level, 0x3498db),
-            "timestamp": datetime.now().isoformat(),
-            "footer": {
-                "text": f"E502 OSINT Terminal | Alert Level: {level.upper()}"
-            }
-        }
-
-        return self.send_message("", embed=embed)
-
-    async def send_scan_summary_async(self) -> None:
-        """Send a summary of recent scans asynchronously."""
-        if not self.scan_history:
-            await self.send_alert_async("Scan Summary", "No scans have been performed yet.", "info")
-            return
-        
-        recent_scans = self.scan_history[-10:] if len(self.scan_history) > 10 else self.scan_history
-        
-        summary = "**Recent Scan Activity**\n\n"
-        for i, scan in enumerate(recent_scans, 1):
-            summary += f"{i}. **{scan['type'].upper()}**: {scan['target']} ({scan['timestamp']})\n"
-        
-        embed = {
-            "title": "📊 E502 Scan Summary",
-            "description": summary,
-            "color": 0x3498db,
-            "fields": [
-                {
-                    "name": "Total Scans",
-                    "value": str(len(self.scan_history)),
-                    "inline": True
-                },
-                {
-                    "name": "Activity Period",
-                    "value": f"{self.scan_history[0]['timestamp']} to {self.scan_history[-1]['timestamp']}",
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Scan History"
-            }
-        }
-        
-        await self.send_message_async("", embed=embed)
-
-    def send_scan_summary(self) -> None:
-        """Send a summary of recent scans."""
-        if not self.scan_history:
-            self.send_alert("Scan Summary", "No scans have been performed yet.", "info")
-            return
-        
-        recent_scans = self.scan_history[-10:] if len(self.scan_history) > 10 else self.scan_history
-        
-        summary = "**Recent Scan Activity**\n\n"
-        for i, scan in enumerate(recent_scans, 1):
-            summary += f"{i}. **{scan['type'].upper()}**: {scan['target']} ({scan['timestamp']})\n"
-        
-        embed = {
-            "title": "📊 E502 Scan Summary",
-            "description": summary,
-            "color": 0x3498db,
-            "fields": [
-                {
-                    "name": "Total Scans",
-                    "value": str(len(self.scan_history)),
-                    "inline": True
-                },
-                {
-                    "name": "Activity Period",
-                    "value": f"{self.scan_history[0]['timestamp']} to {self.scan_history[-1]['timestamp']}",
-                    "inline": True
-                }
-            ],
-            "footer": {
-                "text": "E502 OSINT Terminal | Scan History"
-            }
-        }
-        
-        self.send_message("", embed=embed)
-
-    async def _add_to_history_async(self, scan_type: str, target: str, results: Dict[str, Any]) -> None:
-        """Add scan to history asynchronously."""
-        await self.async_run_in_thread(self._add_to_history, scan_type, target, results)
-
-    def _add_to_history(self, scan_type: str, target: str, results: Dict[str, Any]) -> None:
-        # Add scan to history
-        self.scan_history.append({
-            'type': scan_type,
-            'target': target,
-            'results': results,
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-        
-        # Keep only the last max_history scans
-        if len(self.scan_history) > self.max_history:
-            self.scan_history = self.scan_history[-self.max_history:] 
+# Create global instance
+discord_webhook = DiscordWebhookManager() 

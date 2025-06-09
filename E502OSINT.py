@@ -51,14 +51,44 @@ import functools
 import json
 import aiohttp
 import hashlib
+import logging
+from logging.handlers import RotatingFileHandler
+import pathlib
 
-# Import new modules from core package
-from core.network_analysis import NetworkAnalyzer
-from core.web_recon import WebAnalyzer
-from core.ssl_analyzer import SSLAnalyzer
+# Configure logging
+log_dir = pathlib.Path("logs")
+log_dir.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(
+            log_dir / "e502.log",
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5
+        ),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger("E502OSINT")
+
+# Import core modules
 from core.privacy_manager import PrivacyManager
-from core.vulnerability_scanner import VulnerabilityScanner
 from core.image_intel import ImageIntelligence
+from core.notification_manager import NotificationManager
+from core.report_manager import ReportManager
+from core.config_manager import ConfigManager
+from core.web_security import WebSecurity
+
+# Import scan modules from scan package
+from core.scan import (
+    ScanEngine, ScanController, ScanAnalyzer, ScanReporter,
+    ScanExporter, ScanImporter, ScanValidator, ScanMonitor,
+    ScanLogger, ScanConfigurator, ScanManager, ScanConfig,
+    VulnerabilityScanner, WebScanner, SSLAnalyzer, NetworkAnalyzer
+)
 
 # Import Discord integration
 from discord.webhook_manager import DiscordWebhookManager
@@ -92,14 +122,18 @@ thread_pool = ThreadPoolExecutor(max_workers=10)
 event_loop = asyncio.new_event_loop()
 asyncio.set_event_loop(event_loop)
 
-# Initialize analyzers
+# Initialize analyzers and managers
 network_analyzer = NetworkAnalyzer()
-web_analyzer = WebAnalyzer()
+web_analyzer = WebScanner()
 ssl_analyzer = SSLAnalyzer()
 privacy_manager = PrivacyManager()
 vuln_scanner = VulnerabilityScanner()
 discord_manager = DiscordWebhookManager()
 image_intelligence = ImageIntelligence()
+notification_manager = NotificationManager()
+report_manager = ReportManager()
+config_manager = ConfigManager()
+web_security = WebSecurity()
 
 # Cyber tips and quotes
 CYBER_TIPS = [
@@ -993,106 +1027,154 @@ async def process_command(command: str) -> None:
                 console.print("[red]Please specify a target[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
-            await CURRENT_TASK
-        elif cmd == 'arp':
-            if not args:
-                console.print("[red]Please specify a network interface (e.g., eth0)[/]")
-                return
-            SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
-            await CURRENT_TASK
-        elif cmd == 'fingerprint':
-            if not args:
-                console.print("[red]Please specify a target[/]")
-                return
-            SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Analyzing network..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(async_handle_network_scan(args[0]))
+                result = await CURRENT_TASK
+                display_network_analysis(result)
         elif cmd == 'web':
             if not args:
                 console.print("[red]Please specify a URL[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Analyzing website..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer.analyze_website_async(args[0]))
+                result = await CURRENT_TASK
+                display_web_analysis(result)
+        elif cmd == 'api':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            with Live(create_progress_bar("Discovering API endpoints..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer._discover_api_endpoints(args[0]))
+                result = await CURRENT_TASK
+                display_api_endpoints(result)
+        elif cmd == 'graphql':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            with Live(create_progress_bar("Analyzing GraphQL..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer._analyze_graphql(args[0]))
+                result = await CURRENT_TASK
+                display_graphql_analysis(result)
+        elif cmd == 'websocket':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            with Live(create_progress_bar("Checking WebSocket security..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer._check_websocket_security(args[0]))
+                result = await CURRENT_TASK
+                display_websocket_security(result)
+        elif cmd == 'content':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            with Live(create_progress_bar("Analyzing content..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer._analyze_content(args[0]))
+                result = await CURRENT_TASK
+                display_content_analysis(result)
+        elif cmd == 'tech':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            with Live(create_progress_bar("Detecting technologies..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer._detect_technologies(args[0]))
+                result = await CURRENT_TASK
+                display_technologies(result)
+        elif cmd == 'security':
+            if not args:
+                console.print("[red]Please specify a URL[/]")
+                return
+            SCAN_STATUS = "Scanning"
+            with Live(create_progress_bar("Checking security issues..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer._check_security_issues(args[0]))
+                result = await CURRENT_TASK
+                display_security_issues(result)
         elif cmd == 'headers':
             if not args:
                 console.print("[red]Please specify a URL[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Analyzing headers..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer.analyze_website_async(args[0]))
+                result = await CURRENT_TASK
+                display_security_headers(result.get('security_headers', {}))
         elif cmd == 'waf':
             if not args:
                 console.print("[red]Please specify a URL[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Detecting WAF..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer.analyze_website_async(args[0]))
+                result = await CURRENT_TASK
+                display_waf_detection(result.get('waf_detection', {}))
         elif cmd == 'cookies':
             if not args:
                 console.print("[red]Please specify a URL[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_web_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Analyzing cookies..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(web_analyzer.analyze_website_async(args[0]))
+                result = await CURRENT_TASK
+                display_cookie_analysis(result.get('cookies', {}))
         elif cmd == 'ssl':
             if not args:
                 console.print("[red]Please specify a hostname[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Analyzing SSL/TLS..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(ssl_analyzer.analyze_ssl_async(args[0]))
+                result = await CURRENT_TASK
+                display_ssl_analysis(result)
         elif cmd == 'cert':
             if not args:
                 console.print("[red]Please specify a hostname[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Checking certificate..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(ssl_analyzer.analyze_ssl_async(args[0]))
+                result = await CURRENT_TASK
+                display_certificate_info(result.get('certificate', {}))
         elif cmd == 'ciphers':
             if not args:
                 console.print("[red]Please specify a hostname[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
-            await CURRENT_TASK
-        elif cmd == 'hsts':
-            if not args:
-                console.print("[red]Please specify a hostname[/]")
-                return
-            SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_ssl_analysis(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Analyzing cipher suites..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(ssl_analyzer.analyze_ssl_async(args[0]))
+                result = await CURRENT_TASK
+                display_cipher_suites(result.get('ciphers', {}))
         elif cmd == 'vuln':
             if not args:
                 console.print("[red]Please specify a target[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Scanning for vulnerabilities..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(vuln_scanner.scan_target_async(args[0]))
+                result = await CURRENT_TASK
+                display_vulnerability_table(result)
         elif cmd == 'ports':
             if not args:
                 console.print("[red]Please specify a target[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Scanning ports..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(network_analyzer._scan_ports(args[0]))
+                result = await CURRENT_TASK
+                display_port_scan_results(result)
         elif cmd == 'services':
             if not args:
                 console.print("[red]Please specify a target[/]")
                 return
             SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
-            await CURRENT_TASK
-        elif cmd == 'creds':
-            if not args:
-                console.print("[red]Please specify a target[/]")
-                return
-            SCAN_STATUS = "Scanning"
-            CURRENT_TASK = asyncio.create_task(async_handle_vuln_scan(args[0]))
-            await CURRENT_TASK
+            with Live(create_progress_bar("Enumerating services..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(network_analyzer._enumerate_services(args[0]))
+                result = await CURRENT_TASK
+                display_service_enumeration(result)
         elif cmd == 'image':
             if not args:
                 console.print("[red]Please specify an image file[/]")
@@ -1102,9 +1184,10 @@ async def process_command(command: str) -> None:
             if not os.path.exists(image_path):
                 console.print(f"[red]Image file not found: {image_path}[/]")
                 return
-            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.analyze_image, image_path))
-            analysis = await CURRENT_TASK
-            image_intelligence.display_image_analysis(analysis)
+            with Live(create_progress_bar("Analyzing image..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.analyze_image, image_path))
+                result = await CURRENT_TASK
+                image_intelligence.display_image_analysis(result)
         elif cmd == 'exif':
             if not args:
                 console.print("[red]Please specify an image file[/]")
@@ -1114,14 +1197,10 @@ async def process_command(command: str) -> None:
             if not os.path.exists(image_path):
                 console.print(f"[red]Image file not found: {image_path}[/]")
                 return
-            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence._extract_exif, image_path))
-            exif_data = await CURRENT_TASK
-            table = Table(title="EXIF Data")
-            table.add_column("Tag", style="cyan")
-            table.add_column("Value", style="green")
-            for tag, value in exif_data.items():
-                table.add_row(tag, str(value))
-            console.print(table)
+            with Live(create_progress_bar("Extracting EXIF data..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence._extract_exif, image_path))
+                result = await CURRENT_TASK
+                display_exif_data(result)
         elif cmd == 'geo':
             if not args:
                 console.print("[red]Please specify an image file[/]")
@@ -1131,202 +1210,740 @@ async def process_command(command: str) -> None:
             if not os.path.exists(image_path):
                 console.print(f"[red]Image file not found: {image_path}[/]")
                 return
-            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.extract_geo_data, image_path))
-            geo_data = await CURRENT_TASK
-            if geo_data:
-                table = Table(title="Geolocation Data")
-                table.add_column("Field", style="cyan")
-                table.add_column("Value", style="green")
-                for field, value in geo_data.items():
-                    table.add_row(field, str(value))
-                console.print(table)
-            else:
-                console.print("[yellow]No geolocation data found in image[/]")
-        elif cmd == 'stego':
-            if not args:
-                console.print("[red]Please specify an image file[/]")
-                return
-            SCAN_STATUS = "Scanning"
-            image_path = args[0]
-            if not os.path.exists(image_path):
-                console.print(f"[red]Image file not found: {image_path}[/]")
-                return
-            CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.check_steganography, image_path))
-            stego_data = await CURRENT_TASK
-            if stego_data:
-                table = Table(title="Steganography Analysis")
-                table.add_column("Type", style="cyan")
-                table.add_column("Result", style="green")
-                for stego_type, result in stego_data.items():
-                    table.add_row(stego_type, str(result))
-                console.print(table)
-            else:
-                console.print("[yellow]No steganography detected[/]")
-        elif cmd == 'hash':
-            if not args:
-                console.print("[red]Please specify a file to hash[/]")
-                return
-            SCAN_STATUS = "Scanning"
-            file_path = args[0]
-            if not os.path.exists(file_path):
-                console.print(f"[red]File not found: {file_path}[/]")
-                return
-            CURRENT_TASK = asyncio.create_task(run_in_thread(lambda: open(file_path, 'rb').read()))
-            content = await CURRENT_TASK
-            md5_hash = hashlib.md5(content).hexdigest()
-            sha1_hash = hashlib.sha1(content).hexdigest()
-            sha256_hash = hashlib.sha256(content).hexdigest()
-            console.print(f"[green]MD5:[/] {md5_hash}")
-            console.print(f"[green]SHA1:[/] {sha1_hash}")
-            console.print(f"[green]SHA256:[/] {sha256_hash}")
+            with Live(create_progress_bar("Extracting geolocation data..."), refresh_per_second=10) as live:
+                CURRENT_TASK = asyncio.create_task(run_in_thread(image_intelligence.extract_geo_data, image_path))
+                result = await CURRENT_TASK
+                display_geo_data(result)
         elif cmd == 'proxy':
-            if len(args) >= 4 and args[0] == 'add':
-                name, host, port, proxy_type = args[1:5]
-                CURRENT_TASK = asyncio.create_task(async_handle_add_proxy(name, host, int(port), proxy_type))
-                await CURRENT_TASK
-            elif args and args[0] == 'chain':
-                CURRENT_TASK = asyncio.create_task(async_handle_proxy_chain(args[1:]))
-                await CURRENT_TASK
-            elif args and args[0] == 'status':
-                console.print("[yellow]Current proxy status:[/]", "Enabled" if USE_PROXY else "Disabled")
-            elif args and args[0] == 'on':
-                setup_proxy()
-            elif args and args[0] == 'off':
-                USE_PROXY = False
-                console.print("[green]Proxy disabled[/]")
+            if len(args) < 2:
+                console.print("[red]Invalid proxy command. Use 'proxy help' for usage.[/]")
+                return
+            subcmd = args[0].lower()
+            if subcmd == 'add':
+                if len(args) < 5:
+                    console.print("[red]Usage: proxy add <name> <host> <port> <type>[/]")
+                    return
+                await async_handle_add_proxy(args[1], args[2], int(args[3]), args[4])
+            elif subcmd == 'chain':
+                if len(args) < 2:
+                    console.print("[red]Usage: proxy chain <proxy1> <proxy2> ...[/]")
+                    return
+                await async_handle_proxy_chain(args[1:])
+            elif subcmd == 'status':
+                await async_handle_privacy_status()
             else:
-                console.print("[yellow]Current proxy status:[/]", "Enabled" if USE_PROXY else "Disabled")
+                console.print("[red]Unknown proxy command. Use 'proxy help' for usage.[/]")
+        elif cmd == 'tor':
+            if not args or args[0] != 'check':
+                console.print("[red]Usage: tor check[/]")
+                return
+            await async_handle_check_tor()
+        elif cmd == 'rotate':
+            await async_handle_rotate_user_agent()
         elif cmd == 'rate':
             if len(args) < 2:
-                console.print("[red]Please specify domain and requests per second[/]")
+                console.print("[red]Usage: rate <domain> <requests_per_second>[/]")
                 return
-            domain = args[0]
             try:
                 rate = float(args[1])
-                CURRENT_TASK = asyncio.create_task(async_handle_rate_limit(domain, rate))
-                await CURRENT_TASK
+                await async_handle_rate_limit(args[0], rate)
             except ValueError:
-                console.print("[red]Invalid rate limit value[/]")
-        elif cmd == 'rotate':
-            CURRENT_TASK = asyncio.create_task(async_handle_rotate_user_agent())
-            await CURRENT_TASK
-        elif cmd == 'check' and args and args[0] == 'tor':
-            CURRENT_TASK = asyncio.create_task(async_handle_check_tor())
-            await CURRENT_TASK
+                console.print("[red]Invalid rate value. Must be a number.[/]")
         elif cmd == 'discord':
-            CURRENT_TASK = asyncio.create_task(async_handle_discord_command(parts))
-            await CURRENT_TASK
+            if not args:
+                console.print("[red]Please specify a Discord command. Use 'discord help' for usage.[/]")
+                return
+            await async_handle_discord_command(args)
         elif cmd == 'clear':
             os.system('cls' if os.name == 'nt' else 'clear')
-            display_banner()
         elif cmd == 'exit':
             console.print("[bold yellow]Exiting E502 OSINT Terminal...[/]")
             sys.exit(0)
-        elif cmd == 'version':
-            console.print(f"[bold green]Version:[/] {VERSION}")
-            console.print(f"[bold green]Author:[/] {AUTHOR}")
         else:
-            console.print("[red]Unknown command. Type 'help' for available commands.[/]")
+            console.print(f"[red]Unknown command: {cmd}[/]")
+            console.print("Use 'help' to see available commands.")
             
-        SCAN_STATUS = "Ready"
-        LAST_COMMAND = command
-        CURRENT_TASK = None
-        
-    except asyncio.CancelledError:
-        console.print("\n[yellow]Operation cancelled by user.[/]")
-        SCAN_STATUS = "Ready"
-        CURRENT_TASK = None
     except Exception as e:
-        console.print(f"[red]Error processing command: {str(e)}[/]")
+        console.print(f"[red]Error executing command: {str(e)}[/]")
         SCAN_STATUS = "Error"
+    finally:
+        SCAN_STATUS = "Ready"
         CURRENT_TASK = None
 
 def show_help() -> None:
     """Display help information."""
-    console.print("\n[bold blue]E502 OSINT Terminal Commands[/]")
+    console.print("\n[bold cyan]E502 OSINT Terminal - Available Commands[/]")
+    console.print("=" * 50)
     
-    commands = {
-        "Network Analysis": [
-            ("network <target>", "Perform network topology mapping"),
-            ("arp <interface>", "Perform ARP scan on interface"),
-            ("fingerprint <target>", "Perform device fingerprinting")
-        ],
-        "Web Analysis": [
-            ("web <url>", "Analyze website technology stack"),
-            ("headers <url>", "Check security headers"),
-            ("waf <url>", "Detect web application firewall"),
-            ("cookies <url>", "Analyze cookie security")
-        ],
-        "SSL/TLS Analysis": [
-            ("ssl <hostname>", "Analyze SSL/TLS configuration"),
-            ("cert <hostname>", "Check SSL certificate"),
-            ("ciphers <hostname>", "Analyze cipher suites"),
-            ("hsts <hostname>", "Check HSTS configuration")
-        ],
-        "Vulnerability Assessment": [
-            ("vuln <target>", "Perform vulnerability scan"),
-            ("ports <target>", "Scan for open ports"),
-            ("services <target>", "Enumerate services"),
-            ("creds <target>", "Check default credentials")
-        ],
-        "Image Intelligence": [
-            ("image <path>", "Analyze image metadata and content"),
-            ("exif <path>", "Extract EXIF data"),
-            ("geo <path>", "Extract geolocation data"),
-            ("stego <path>", "Check for hidden content"),
-            ("hash <path>", "Generate image hashes")
-        ],
-        "Privacy Features": [
-            ("proxy add <n> <host> <port> <type>", "Add new proxy"),
-            ("proxy chain <proxy1> <proxy2> ...", "Create proxy chain"),
-            ("proxy status", "Show proxy status"),
-            ("rate <domain> <requests/sec>", "Set rate limit"),
-            ("rotate", "Rotate user agent"),
-            ("check tor", "Check if Tor is running")
-        ],
-        "Discord Integration": [
-            ("discord help", "Show Discord commands"),
-            ("discord enable", "Enable Discord integration"),
-            ("discord disable", "Disable Discord integration"),
-            ("discord set <url>", "Set webhook URL"),
-            ("discord save", "Save webhook URL"),
-            ("discord test", "Send test message"),
-            ("discord status", "Show integration status"),
-            ("discord summary", "Send scan summary"),
-            ("discord clear", "Clear scan history")
-        ],
-        "System": [
-            ("help", "Show this help message"),
-            ("clear", "Clear screen"),
-            ("exit", "Exit program"),
-            ("version", "Show version information")
-        ]
+    # Network Analysis
+    console.print("\n[bold yellow]Network Analysis[/]")
+    console.print("-" * 30)
+    console.print("network <target>     - Perform comprehensive network analysis")
+    console.print("ports <target>       - Scan for open ports")
+    console.print("services <target>    - Enumerate running services")
+    
+    # Web Analysis
+    console.print("\n[bold yellow]Web Analysis[/]")
+    console.print("-" * 30)
+    console.print("web <url>           - Perform comprehensive website analysis")
+    console.print("api <url>           - Discover and analyze API endpoints")
+    console.print("graphql <url>       - Analyze GraphQL endpoint")
+    console.print("websocket <url>     - Check WebSocket security")
+    console.print("content <url>       - Analyze website content")
+    console.print("tech <url>          - Detect technologies used")
+    console.print("security <url>      - Check for security issues")
+    console.print("headers <url>       - Analyze security headers")
+    console.print("waf <url>           - Detect Web Application Firewall")
+    console.print("cookies <url>       - Analyze cookies")
+    
+    # SSL/TLS Analysis
+    console.print("\n[bold yellow]SSL/TLS Analysis[/]")
+    console.print("-" * 30)
+    console.print("ssl <hostname>      - Analyze SSL/TLS configuration")
+    console.print("cert <hostname>     - Check SSL certificate")
+    console.print("ciphers <hostname>  - Analyze cipher suites")
+    
+    # Vulnerability Scanning
+    console.print("\n[bold yellow]Vulnerability Scanning[/]")
+    console.print("-" * 30)
+    console.print("vuln <target>       - Scan for vulnerabilities")
+    
+    # Image Analysis
+    console.print("\n[bold yellow]Image Analysis[/]")
+    console.print("-" * 30)
+    console.print("image <file>        - Analyze image file")
+    console.print("exif <file>         - Extract EXIF data")
+    console.print("geo <file>          - Extract geolocation data")
+    
+    # Privacy & Proxy
+    console.print("\n[bold yellow]Privacy & Proxy[/]")
+    console.print("-" * 30)
+    console.print("proxy add <name> <host> <port> <type>  - Add proxy")
+    console.print("proxy chain <proxy1> <proxy2> ...      - Chain proxies")
+    console.print("proxy status                            - Check privacy status")
+    console.print("tor check                              - Check Tor connection")
+    
+    # Other
+    console.print("\n[bold yellow]Other[/]")
+    console.print("-" * 30)
+    console.print("help                 - Show this help message")
+    console.print("exit                 - Exit the program")
+
+def display_network_analysis(analysis: Dict) -> None:
+    """Display network analysis results in a detailed format."""
+    if not analysis:
+        console.print("[red]No analysis results available[/]")
+        return
+        
+    # Create main layout
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body"),
+        Layout(name="footer", size=10)
+    )
+    
+    # Header section
+    header = Table.grid()
+    header.add_row(f"[bold blue]Target:[/] {analysis['target']}")
+    header.add_row(f"[bold blue]IP:[/] {analysis['ip']}")
+    header.add_row(f"[bold blue]Timestamp:[/] {analysis['timestamp']}")
+    layout["header"].update(Panel(header, title="Network Analysis Summary", border_style="blue"))
+    
+    # Body section with multiple panels
+    body_layout = Layout()
+    body_layout.split_row(
+        Layout(name="topology", ratio=1),
+        Layout(name="protocols", ratio=1)
+    )
+    
+    # Topology panel
+    topology_table = Table(title="Network Topology", box=box.ROUNDED)
+    topology_table.add_column("Device", style="cyan")
+    topology_table.add_column("IP", style="green")
+    topology_table.add_column("Status", style="yellow")
+    
+    for device in analysis.get('topology', {}).get('devices', []):
+        topology_table.add_row(
+            device.get('hostname', 'Unknown'),
+            device.get('ip', 'Unknown'),
+            device.get('status', 'Unknown')
+        )
+    body_layout["topology"].update(Panel(topology_table, border_style="cyan"))
+    
+    # Protocols panel
+    protocols_table = Table(title="Modern Protocols", box=box.ROUNDED)
+    protocols_table.add_column("Protocol", style="cyan")
+    protocols_table.add_column("Supported", style="green")
+    protocols_table.add_column("Version", style="yellow")
+    
+    for proto, info in analysis.get('modern_protocols', {}).get('protocols', {}).items():
+        protocols_table.add_row(
+            proto.upper(),
+            "✓" if info.get('supported') else "✗",
+            info.get('version', 'N/A')
+        )
+    body_layout["protocols"].update(Panel(protocols_table, border_style="cyan"))
+    
+    layout["body"].update(body_layout)
+    
+    # Footer section with traffic patterns
+    traffic_table = Table(title="Traffic Patterns", box=box.ROUNDED)
+    traffic_table.add_column("Metric", style="cyan")
+    traffic_table.add_column("Value", style="green")
+    
+    patterns = analysis.get('traffic_patterns', {}).get('patterns', {})
+    if patterns:
+        traffic_table.add_row("Protocols", str(patterns.get('protocols', {})))
+        traffic_table.add_row("Ports", str(patterns.get('ports', {})))
+        traffic_table.add_row("Avg Packet Size", f"{sum(patterns.get('packet_sizes', [0]))/len(patterns.get('packet_sizes', [1])):.2f} bytes")
+        traffic_table.add_row("Avg Interval", f"{sum(patterns.get('intervals', [0]))/len(patterns.get('intervals', [1])):.2f} seconds")
+    
+    layout["footer"].update(Panel(traffic_table, border_style="cyan"))
+    
+    # Display the complete layout
+    console.print(layout)
+
+def display_modern_protocols(analysis: Dict) -> None:
+    """Display modern protocol analysis results."""
+    if not analysis:
+        console.print("[red]No protocol analysis results available[/]")
+        return
+        
+    # Create layout
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body")
+    )
+    
+    # Header
+    header = Table.grid()
+    header.add_row(f"[bold blue]Target:[/] {analysis.get('target', 'Unknown')}")
+    header.add_row(f"[bold blue]Timestamp:[/] {analysis.get('timestamp', 'Unknown')}")
+    layout["header"].update(Panel(header, title="Modern Protocol Analysis", border_style="blue"))
+    
+    # Protocol details
+    table = Table(title="Protocol Support", box=box.ROUNDED)
+    table.add_column("Protocol", style="cyan")
+    table.add_column("Supported", style="green")
+    table.add_column("Version", style="yellow")
+    table.add_column("Details", style="blue")
+    
+    for proto, info in analysis.get('protocols', {}).items():
+        details = []
+        if proto == 'quic':
+            details.append("QUIC is a transport layer protocol")
+        elif proto == 'http3':
+            details.append("HTTP/3 is the latest HTTP version")
+        elif proto == 'http2':
+            details.append("HTTP/2 provides multiplexing")
+        elif proto == 'tls13':
+            details.append("TLS 1.3 is the latest TLS version")
+            
+        table.add_row(
+            proto.upper(),
+            "✓" if info.get('supported') else "✗",
+            info.get('version', 'N/A'),
+            "\n".join(details)
+        )
+    
+    layout["body"].update(Panel(table, border_style="cyan"))
+    console.print(layout)
+
+def display_traffic_patterns(analysis: Dict) -> None:
+    """Display traffic pattern analysis results."""
+    if not analysis:
+        console.print("[red]No traffic pattern analysis results available[/]")
+        return
+        
+    patterns = analysis.get('patterns', {})
+    
+    # Create layout
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body")
+    )
+    
+    # Header
+    header = Table.grid()
+    header.add_row(f"[bold blue]Target:[/] {analysis.get('target', 'Unknown')}")
+    header.add_row(f"[bold blue]Timestamp:[/] {analysis.get('timestamp', 'Unknown')}")
+    layout["header"].update(Panel(header, title="Traffic Pattern Analysis", border_style="blue"))
+    
+    # Body with two panels
+    body_layout = Layout()
+    body_layout.split_row(
+        Layout(name="protocols", ratio=1),
+        Layout(name="statistics", ratio=1)
+    )
+    
+    # Protocols panel
+    protocols_table = Table(title="Protocol Distribution", box=box.ROUNDED)
+    protocols_table.add_column("Protocol", style="cyan")
+    protocols_table.add_column("Count", style="green")
+    protocols_table.add_column("Percentage", style="yellow")
+    
+    total_packets = sum(patterns.get('protocols', {}).values())
+    for proto, count in patterns.get('protocols', {}).items():
+        percentage = (count / total_packets * 100) if total_packets > 0 else 0
+        protocols_table.add_row(
+            proto,
+            str(count),
+            f"{percentage:.1f}%"
+        )
+    
+    body_layout["protocols"].update(Panel(protocols_table, border_style="cyan"))
+    
+    # Statistics panel
+    stats_table = Table(title="Traffic Statistics", box=box.ROUNDED)
+    stats_table.add_column("Metric", style="cyan")
+    stats_table.add_column("Value", style="green")
+    
+    packet_sizes = patterns.get('packet_sizes', [])
+    intervals = patterns.get('intervals', [])
+    
+    if packet_sizes:
+        stats_table.add_row("Average Packet Size", f"{sum(packet_sizes)/len(packet_sizes):.2f} bytes")
+        stats_table.add_row("Min Packet Size", f"{min(packet_sizes)} bytes")
+        stats_table.add_row("Max Packet Size", f"{max(packet_sizes)} bytes")
+    
+    if intervals:
+        stats_table.add_row("Average Interval", f"{sum(intervals)/len(intervals):.2f} seconds")
+        stats_table.add_row("Min Interval", f"{min(intervals):.2f} seconds")
+        stats_table.add_row("Max Interval", f"{max(intervals):.2f} seconds")
+    
+    body_layout["statistics"].update(Panel(stats_table, border_style="cyan"))
+    
+    layout["body"].update(body_layout)
+    console.print(layout)
+
+def display_security_headers(headers: Dict) -> None:
+    """Display security headers analysis."""
+    if not headers:
+        console.print("[yellow]No security headers found[/]")
+        return
+        
+    table = Table(title="Security Headers Analysis", box=box.ROUNDED)
+    table.add_column("Header", style="cyan")
+    table.add_column("Present", style="green")
+    table.add_column("Value", style="yellow")
+    table.add_column("Recommendation", style="blue")
+    
+    for header, info in headers.items():
+        table.add_row(
+            header,
+            "✓" if info.get('present') else "✗",
+            info.get('value', 'N/A'),
+            info.get('recommendation', '')
+        )
+    
+    console.print(table)
+
+def display_waf_detection(waf_info: Dict) -> None:
+    """Display WAF detection results."""
+    if not waf_info:
+        console.print("[yellow]No WAF detection results available[/]")
+        return
+        
+    table = Table(title="WAF Detection Results", box=box.ROUNDED)
+    table.add_column("Status", style="cyan")
+    table.add_column("Detected WAFs", style="green")
+    
+    table.add_row(
+        "Detected" if waf_info.get('detected') else "Not Detected",
+        ", ".join(waf_info.get('wafs', [])) if waf_info.get('wafs') else "None"
+    )
+    
+    console.print(table)
+
+def display_cookie_analysis(cookies: Dict) -> None:
+    """Display cookie analysis results."""
+    if not cookies:
+        console.print("[yellow]No cookies found[/]")
+        return
+        
+    table = Table(title="Cookie Analysis", box=box.ROUNDED)
+    table.add_column("Cookie", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_column("Flags", style="yellow")
+    table.add_column("Security", style="blue")
+    
+    for cookie, info in cookies.items():
+        flags = []
+        if info.get('secure'):
+            flags.append("Secure")
+        if info.get('httponly'):
+            flags.append("HttpOnly")
+        if info.get('samesite'):
+            flags.append(f"SameSite={info['samesite']}")
+            
+        security = []
+        if not info.get('secure'):
+            security.append("Missing Secure flag")
+        if not info.get('httponly'):
+            security.append("Missing HttpOnly flag")
+        if not info.get('samesite'):
+            security.append("Missing SameSite attribute")
+            
+        table.add_row(
+            cookie,
+            info.get('value', 'N/A'),
+            ", ".join(flags) if flags else "None",
+            ", ".join(security) if security else "Secure"
+        )
+    
+    console.print(table)
+
+def display_ssl_analysis(analysis: Dict) -> None:
+    """Display SSL/TLS analysis results."""
+    if not analysis:
+        console.print("[yellow]No SSL/TLS analysis results available[/]")
+        return
+        
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body")
+    )
+    
+    # Header
+    header = Table.grid()
+    header.add_row(f"[bold blue]Hostname:[/] {analysis.get('hostname', 'Unknown')}")
+    header.add_row(f"[bold blue]Timestamp:[/] {analysis.get('timestamp', 'Unknown')}")
+    layout["header"].update(Panel(header, title="SSL/TLS Analysis", border_style="blue"))
+    
+    # Body with multiple panels
+    body_layout = Layout()
+    body_layout.split_row(
+        Layout(name="protocols", ratio=1),
+        Layout(name="certificate", ratio=1)
+    )
+    
+    # Protocols panel
+    protocols_table = Table(title="Protocol Support", box=box.ROUNDED)
+    protocols_table.add_column("Protocol", style="cyan")
+    protocols_table.add_column("Supported", style="green")
+    protocols_table.add_column("Version", style="yellow")
+    
+    for proto, info in analysis.get('protocols', {}).items():
+        protocols_table.add_row(
+            proto.upper(),
+            "✓" if info.get('supported') else "✗",
+            info.get('version', 'N/A')
+        )
+    
+    body_layout["protocols"].update(Panel(protocols_table, border_style="cyan"))
+    
+    # Certificate panel
+    cert_table = Table(title="Certificate Information", box=box.ROUNDED)
+    cert_table.add_column("Field", style="cyan")
+    cert_table.add_column("Value", style="green")
+    
+    cert = analysis.get('certificate', {})
+    if cert:
+        cert_table.add_row("Subject", cert.get('subject', 'N/A'))
+        cert_table.add_row("Issuer", cert.get('issuer', 'N/A'))
+        cert_table.add_row("Valid From", cert.get('not_before', 'N/A'))
+        cert_table.add_row("Valid Until", cert.get('not_after', 'N/A'))
+        cert_table.add_row("Serial Number", cert.get('serial_number', 'N/A'))
+    
+    body_layout["certificate"].update(Panel(cert_table, border_style="cyan"))
+    
+    layout["body"].update(body_layout)
+    console.print(layout)
+
+def display_certificate_info(cert: Dict) -> None:
+    """Display SSL certificate information."""
+    if not cert:
+        console.print("[yellow]No certificate information available[/]")
+        return
+        
+    table = Table(title="SSL Certificate Information", box=box.ROUNDED)
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    
+    for field, value in cert.items():
+        table.add_row(field.replace('_', ' ').title(), str(value))
+    
+    console.print(table)
+
+def display_cipher_suites(ciphers: Dict) -> None:
+    """Display cipher suite information."""
+    if not ciphers:
+        console.print("[yellow]No cipher suite information available[/]")
+        return
+        
+    table = Table(title="Cipher Suites", box=box.ROUNDED)
+    table.add_column("Cipher", style="cyan")
+    table.add_column("Strength", style="green")
+    table.add_column("Protocol", style="yellow")
+    
+    for cipher, info in ciphers.items():
+        strength = "Strong" if info.get('strength', 0) >= 128 else "Weak"
+        table.add_row(
+            cipher,
+            strength,
+            info.get('protocol', 'N/A')
+        )
+    
+    console.print(table)
+
+def display_service_enumeration(services: List[Dict]) -> None:
+    """Display service enumeration results."""
+    if not services:
+        console.print("[yellow]No services found[/]")
+        return
+        
+    table = Table(title="Service Enumeration", box=box.ROUNDED)
+    table.add_column("Port", style="cyan")
+    table.add_column("Service", style="green")
+    table.add_column("Version", style="yellow")
+    table.add_column("State", style="blue")
+    
+    for service in services:
+        table.add_row(
+            str(service.get('port', 'N/A')),
+            service.get('name', 'Unknown'),
+            service.get('version', 'N/A'),
+            service.get('state', 'Unknown')
+        )
+    
+    console.print(table)
+
+def display_exif_data(exif: Dict) -> None:
+    """Display EXIF data from image."""
+    if not exif:
+        console.print("[yellow]No EXIF data found[/]")
+        return
+        
+    table = Table(title="EXIF Data", box=box.ROUNDED)
+    table.add_column("Tag", style="cyan")
+    table.add_column("Value", style="green")
+    
+    for tag, value in exif.items():
+        table.add_row(tag, str(value))
+    
+    console.print(table)
+
+def display_geo_data(geo: Dict) -> None:
+    """Display geolocation data from image."""
+    if not geo:
+        console.print("[yellow]No geolocation data found[/]")
+        return
+        
+    table = Table(title="Geolocation Data", box=box.ROUNDED)
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    
+    for field, value in geo.items():
+        table.add_row(field, str(value))
+    
+    console.print(table)
+
+def display_api_endpoints(endpoints: List[Dict]) -> None:
+    """Display API endpoint discovery results."""
+    console.print("\n[bold cyan]API Endpoint Discovery Results[/]")
+    console.print("=" * 50)
+    
+    if not endpoints:
+        console.print("[yellow]No API endpoints discovered[/]")
+        return
+    
+    for endpoint in endpoints:
+        console.print(f"\n[bold yellow]Endpoint: {endpoint['path']}[/]")
+        console.print("-" * 30)
+        console.print(f"Status Code: {endpoint['status_code']}")
+        console.print(f"Content Type: {endpoint['content_type']}")
+        
+        console.print("\n[bold]Supported Methods:[/]")
+        for method in endpoint['methods']:
+            console.print(f"  • {method}")
+        
+        console.print("\n[bold]Authentication:[/]")
+        if endpoint['authentication']['required']:
+            console.print(f"  • Required: Yes")
+            console.print(f"  • Type: {endpoint['authentication']['type']}")
+        else:
+            console.print("  • Required: No")
+        
+        console.print("\n[bold]Parameters:[/]")
+        for param in endpoint['parameters']:
+            console.print(f"  • {param['name']} ({param['type']})")
+            if param['description']:
+                console.print(f"    Description: {param['description']}")
+
+def display_graphql_analysis(results: Dict) -> None:
+    """Display GraphQL analysis results."""
+    console.print("\n[bold cyan]GraphQL Analysis Results[/]")
+    console.print("=" * 50)
+    
+    if not results['endpoint']:
+        console.print("[yellow]No GraphQL endpoint found[/]")
+        return
+    
+    console.print(f"\n[bold yellow]Endpoint: {results['endpoint']}[/]")
+    console.print("-" * 30)
+    
+    console.print(f"Introspection Enabled: {'[green]Yes[/]' if results['introspection_enabled'] else '[red]No[/]'}")
+    
+    if results['security_issues']:
+        console.print("\n[bold red]Security Issues:[/]")
+        for issue in results['security_issues']:
+            console.print(f"  • {issue}")
+    
+    if results['introspection_enabled'] and 'schema' in results:
+        console.print("\n[bold yellow]Schema Types:[/]")
+        for type_info in results['schema'].get('data', {}).get('__schema', {}).get('types', []):
+            console.print(f"  • {type_info.get('name', '')}")
+
+def display_websocket_security(results: Dict) -> None:
+    """Display WebSocket security analysis results."""
+    console.print("\n[bold cyan]WebSocket Security Analysis Results[/]")
+    console.print("=" * 50)
+    
+    if not results['endpoint']:
+        console.print("[yellow]No WebSocket endpoint found[/]")
+        return
+    
+    console.print(f"\n[bold yellow]Endpoint: {results['endpoint']}[/]")
+    console.print("-" * 30)
+    
+    if results['security_issues']:
+        console.print("\n[bold red]Security Issues:[/]")
+        for issue in results['security_issues']:
+            console.print(f"  • {issue}")
+    
+    if results['recommendations']:
+        console.print("\n[bold yellow]Recommendations:[/]")
+        for rec in results['recommendations']:
+            console.print(f"  • {rec}")
+
+def display_content_analysis(results: Dict) -> None:
+    """Display content analysis results."""
+    console.print("\n[bold cyan]Content Analysis Results[/]")
+    console.print("=" * 50)
+    
+    # Title
+    if results['title']:
+        console.print(f"\n[bold yellow]Title:[/] {results['title']}")
+    
+    # Meta Tags
+    console.print("\n[bold yellow]Meta Tags:[/]")
+    console.print("-" * 30)
+    for tag in results['meta_tags']:
+        if tag['name'] or tag['property']:
+            name = tag['name'] or tag['property']
+            console.print(f"  • {name}: {tag['content']}")
+    
+    # Links
+    console.print("\n[bold yellow]Links:[/]")
+    console.print("-" * 30)
+    for link in results['links']:
+        console.print(f"  • {link['text']} -> {link['url']}")
+    
+    # Forms
+    console.print("\n[bold yellow]Forms:[/]")
+    console.print("-" * 30)
+    for form in results['forms']:
+        console.print(f"  • Action: {form['action']}")
+        console.print(f"    Method: {form['method']}")
+        console.print("    Inputs:")
+        for input_field in form['inputs']:
+            console.print(f"      - {input_field['name']} ({input_field['type']})")
+    
+    # Scripts
+    console.print("\n[bold yellow]Scripts:[/]")
+    console.print("-" * 30)
+    for script in results['scripts']:
+        if script['src']:
+            console.print(f"  • External: {script['src']}")
+        else:
+            console.print("  • Inline script")
+    
+    # Images
+    console.print("\n[bold yellow]Images:[/]")
+    console.print("-" * 30)
+    for img in results['images']:
+        console.print(f"  • {img['src']}")
+        if img['alt']:
+            console.print(f"    Alt: {img['alt']}")
+    
+    # Text Content
+    console.print("\n[bold yellow]Text Content:[/]")
+    console.print("-" * 30)
+    console.print(f"Word Count: {results['text_content']['word_count']}")
+    console.print(f"Line Count: {results['text_content']['line_count']}")
+
+def display_technologies(technologies: List[str]) -> None:
+    """Display detected technologies."""
+    console.print("\n[bold cyan]Detected Technologies[/]")
+    console.print("=" * 50)
+    
+    if not technologies:
+        console.print("[yellow]No technologies detected[/]")
+        return
+    
+    # Group technologies by category
+    categories = {
+        'Web Server': ['Apache', 'Nginx', 'IIS'],
+        'Programming Language': ['PHP', 'ASP.NET', 'Python'],
+        'Frontend Framework': ['jQuery', 'React', 'Angular', 'Vue.js'],
+        'CMS': ['WordPress', 'Drupal', 'Joomla']
     }
     
-    for category, cmds in commands.items():
-        console.print(f"\n[bold yellow]{category}[/]")
-        for cmd, desc in cmds:
-            console.print(f"  [cyan]{cmd}[/] - {desc}")
+    for category, tech_list in categories.items():
+        matching_techs = [tech for tech in technologies if tech in tech_list]
+        if matching_techs:
+            console.print(f"\n[bold yellow]{category}:[/]")
+            for tech in matching_techs:
+                console.print(f"  • {tech}")
     
-    console.print("\n[bold green]Examples:[/]")
-    console.print("  network 192.168.1.0/24")
-    console.print("  arp eth0")
-    console.print("  fingerprint 192.168.1.1")
-    console.print("  web example.com")
-    console.print("  headers example.com")
-    console.print("  waf example.com")
-    console.print("  ssl example.com")
-    console.print("  vuln example.com")
-    console.print("  ports example.com")
-    console.print("  image photo.jpg")
-    console.print("  exif photo.jpg")
-    console.print("  geo photo.jpg")
-    console.print("  stego photo.jpg")
-    console.print("  proxy add tor 127.0.0.1 9050 socks5")
-    console.print("  rate example.com 10")
-    console.print("  rotate")
-    console.print("  check tor")
-    console.print("  discord enable")
+    # Display other technologies
+    other_techs = [tech for tech in technologies if not any(tech in tech_list for tech_list in categories.values())]
+    if other_techs:
+        console.print("\n[bold yellow]Other Technologies:[/]")
+        for tech in other_techs:
+            console.print(f"  • {tech}")
+
+def display_security_issues(issues: List[Dict]) -> None:
+    """Display security issues."""
+    console.print("\n[bold cyan]Security Issues[/]")
+    console.print("=" * 50)
+    
+    if not issues:
+        console.print("[green]No security issues found[/]")
+        return
+    
+    # Group issues by severity
+    severity_groups = {
+        'critical': [],
+        'high': [],
+        'medium': [],
+        'low': [],
+        'info': []
+    }
+    
+    for issue in issues:
+        severity_groups[issue['severity']].append(issue)
+    
+    # Display issues by severity
+    for severity, issues_list in severity_groups.items():
+        if issues_list:
+            severity_color = {
+                'critical': 'red',
+                'high': 'red',
+                'medium': 'yellow',
+                'low': 'blue',
+                'info': 'cyan'
+            }.get(severity, 'white')
+            
+            console.print(f"\n[bold {severity_color}]{severity.upper()} Issues:[/]")
+            for issue in issues_list:
+                console.print(f"  • {issue['type']}")
+                console.print(f"    Description: {issue['description']}")
+                console.print(f"    Recommendation: {issue['recommendation']}")
 
 def main() -> None:
     """Main entry point for the application."""
