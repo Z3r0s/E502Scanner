@@ -1,6 +1,6 @@
 # E502Scanner Changelog
 
-## [1.1.0] - 2025-07-09
+## [1.1.0] - 2025-06-09
 
 ### Added
 - Enhanced scan engine with robust error handling and retry mechanisms
@@ -260,7 +260,7 @@
   - Integrated troubleshooting
   - Added best practices
 
-## [1.0.0] - 2025-07-08
+## [1.0.0] - 2025-06-08
 
 ### Initial Release
 - Basic scan engine implementation
